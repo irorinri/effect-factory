@@ -1,0 +1,56 @@
+{
+  "name": "Atmospheric Fog",
+  "effect_id": "fog_haze",
+  "loop_mode": true,
+  "output": {
+    "w": 1920,
+    "h": 1080,
+    "fps": 30,
+    "duration": 12.0,
+    "encoder": "h264_nvenc",
+    "nv_preset": "p4",
+    "bitrate": "10M"
+  },
+  "random": {
+    "base_seed": 77889,
+    "variant_mode": "counter"
+  },
+  "params": {
+    "strength": [
+      0.18,
+      0.55
+    ],
+    "contrast": [
+      1.0,
+      1.8
+    ],
+    "blur": [
+      1.2,
+      4.0
+    ],
+    "drift_x_cycles": [
+      0,
+      2
+    ],
+    "drift_y_cycles": [
+      0,
+      2
+    ],
+    "tint": {
+      "choices": [
+        "blue",
+        "purple",
+        "white",
+        "amber"
+      ]
+    },
+    "glow": [
+      0.15,
+      0.55
+    ],
+    "grain": [
+      0.0,
+      0.04
+    ]
+  }
+}

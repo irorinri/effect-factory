@@ -1,0 +1,44 @@
+{
+  "name": "Analog Glitch",
+  "effect_id": "glitch_scanlines",
+  "loop_mode": true,
+  "output": {
+    "w": 1920,
+    "h": 1080,
+    "fps": 30,
+    "duration": 5.0,
+    "encoder": "h264_nvenc",
+    "nv_preset": "p4",
+    "bitrate": "12M"
+  },
+  "random": {
+    "base_seed": 99901,
+    "variant_mode": "counter"
+  },
+  "params": {
+    "intensity": [
+      0.35,
+      0.85
+    ],
+    "scanlines": [
+      0.2,
+      0.6
+    ],
+    "noise": [
+      0.05,
+      0.25
+    ],
+    "tear_prob": [
+      0.05,
+      0.18
+    ],
+    "chromatic": [
+      1,
+      4
+    ],
+    "grain": [
+      0.0,
+      0.06
+    ]
+  }
+}
