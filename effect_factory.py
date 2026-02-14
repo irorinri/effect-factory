@@ -1,4 +1,4 @@
-import os, json, time, queue, threading, subprocess, hashlib, importlib.util
+import os, json, time, queue, threading, subprocess, hashlib, importlib.util, zipfile
 from dataclasses import dataclass
 from datetime import datetime
 import tkinter as tk
@@ -289,6 +289,8 @@ class EffectFactoryApp(tk.Tk):
         root = os.path.dirname(os.path.abspath(__file__))
         self.effects_dir = os.path.join(root, "effects")
         self.presets_dir = os.path.join(root, "presets")
+        self.templates_dir = os.path.join(root, "templates")
+        self.last_export_mp4 = None
 
         self.plugins = load_effects(self.effects_dir)
         if not self.plugins:
@@ -452,6 +454,9 @@ class EffectFactoryApp(tk.Tk):
 
         self.btn_make = ttk.Button(act_col, text="素材を生成（MP4 + meta.json）", command=self._on_generate)
         self.btn_make.pack(side="left", padx=8)
+
+        self.btn_gumroad_zip = ttk.Button(act_col, text="Gumroad用ZIP作成", command=self._on_make_gumroad_zip)
+        self.btn_gumroad_zip.pack(side="left", padx=8)
 
         ttk.Button(act_col, text="コマンド表示", command=self._show_cmd_preview).pack(side="left", padx=8)
 
@@ -762,8 +767,68 @@ class EffectFactoryApp(tk.Tk):
         self.busy = busy
         self.btn_make.config(state=("disabled" if busy else "normal"))
         self.btn_preview.config(state=("disabled" if busy else "normal"))
+        self.btn_gumroad_zip.config(state=("disabled" if busy else "normal"))
         if not busy:
             self.pbar["value"] = 0
+
+    def _template_or_default(self, filename: str, fallback: str) -> str:
+        path = os.path.join(self.templates_dir, filename)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read()
+            return text if text.strip() else fallback
+        except Exception:
+            return fallback
+
+    def create_gumroad_zip(self, mp4_path: str) -> str:
+        if not mp4_path or not os.path.isfile(mp4_path):
+            raise FileNotFoundError("MP4が見つかりません。先に書き出ししてください")
+
+        outdir = os.path.dirname(mp4_path)
+        base = os.path.splitext(os.path.basename(mp4_path))[0]
+        zip_path = os.path.join(outdir, f"{base}__gumroad.zip")
+
+        readme_text = self._template_or_default("README.txt", (
+            "Overlay Video Asset (MP4)\n\n"
+            "- This is a black-background overlay clip for compositing.\n"
+            "- Place it above your base footage and use blend mode: Screen / Add / Lighten.\n"
+            "- Adjust opacity to fit your scene.\n"
+            "- For looping: duplicate clips end-to-end.\n"
+            "- If a seam is visible, add a short crossfade at the boundary.\n\n"
+            "Included files in Gumroad ZIP:\n"
+            "- overlay.mp4\n"
+        ))
+        license_text = self._template_or_default("LICENSE.txt", (
+            "License (Overlay Asset)\n\n"
+            "Allowed:\n"
+            "- Personal and commercial use\n"
+            "- Editing and modification\n"
+            "- Unlimited projects\n"
+            "- Credit not required\n\n"
+            "Prohibited:\n"
+            "- Redistribution of the source files (MP4 / ZIP), whether free or paid\n"
+            "- Resale of the source files as-is or with minor changes\n"
+            "- Re-upload to stock/asset marketplaces\n"
+            "- Sublicensing of the source files\n"
+        ))
+
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.write(mp4_path, arcname="overlay.mp4")
+            zf.writestr("README.txt", readme_text)
+            zf.writestr("LICENSE.txt", license_text)
+        return zip_path
+
+    def _on_make_gumroad_zip(self):
+        mp4_path = self.last_export_mp4
+        if not mp4_path:
+            messagebox.showerror("エラー", "先に書き出ししてください")
+            return
+        try:
+            zip_path = self.create_gumroad_zip(mp4_path)
+            messagebox.showinfo("完了", f"Gumroad用ZIPを作成しました\n{zip_path}")
+            self._log(f"[GUMROAD] ZIP created: {zip_path}")
+        except Exception as e:
+            messagebox.showerror("エラー", str(e))
 
     def _on_preview(self):
         if self.busy:
@@ -1281,6 +1346,7 @@ class EffectFactoryApp(tk.Tk):
                 "note": "Black background overlay. Use Screen/Add blend in PV editor."
             }
             _write_json(meta, meta_obj)
+            self.last_export_mp4 = mp4
 
             self.msgq.put(("log", f"✅ 完了: {mp4}"))
             self.msgq.put(("log", f"   meta: {meta}"))

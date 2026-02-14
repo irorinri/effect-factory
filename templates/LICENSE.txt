@@ -1,0 +1,13 @@
+License (Overlay Asset)
+
+Allowed:
+- Personal and commercial use
+- Editing and modification
+- Unlimited projects
+- Credit not required
+
+Prohibited:
+- Redistribution of the source files (MP4 / ZIP), whether free or paid
+- Resale of the source files as-is or with minor changes
+- Re-upload to stock/asset marketplaces
+- Sublicensing of the source files
