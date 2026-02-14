@@ -1,0 +1,60 @@
+{
+  "name": "Live Stage Rays",
+  "effect_id": "light_rays",
+  "loop_mode": true,
+  "output": {
+    "w": 1920,
+    "h": 1080,
+    "fps": 30,
+    "duration": 6.0,
+    "encoder": "h264_nvenc",
+    "nv_preset": "p4",
+    "bitrate": "12M"
+  },
+  "random": {
+    "base_seed": 13579,
+    "variant_mode": "counter"
+  },
+  "params": {
+    "count": [
+      6,
+      14
+    ],
+    "width": [
+      70.0,
+      170.0
+    ],
+    "strength": [
+      0.35,
+      0.85
+    ],
+    "sweep": [
+      0.12,
+      0.35
+    ],
+    "flicker": [
+      0.05,
+      0.25
+    ],
+    "blur": [
+      0.8,
+      2.2
+    ],
+    "glow": [
+      0.6,
+      1.4
+    ],
+    "color": {
+      "choices": [
+        "cyan",
+        "magenta",
+        "gold",
+        "blue"
+      ]
+    },
+    "grain": [
+      0.0,
+      0.04
+    ]
+  }
+}

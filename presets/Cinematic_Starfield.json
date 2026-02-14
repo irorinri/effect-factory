@@ -1,0 +1,60 @@
+{
+  "name": "Cinematic Starfield",
+  "effect_id": "starfield_pro",
+  "loop_mode": true,
+  "output": {
+    "w": 1920,
+    "h": 1080,
+    "fps": 30,
+    "duration": 10.0,
+    "encoder": "h264_nvenc",
+    "nv_preset": "p4",
+    "bitrate": "12M"
+  },
+  "random": {
+    "base_seed": 12345,
+    "variant_mode": "counter"
+  },
+  "params": {
+    "density": [
+      0.9,
+      1.4
+    ],
+    "nebula": [
+      0.25,
+      0.55
+    ],
+    "twinkle": [
+      0.12,
+      0.28
+    ],
+    "shooting_stars": [
+      2,
+      5
+    ],
+    "glow_radius": [
+      5.0,
+      8.0
+    ],
+    "glow_strength": [
+      0.8,
+      1.2
+    ],
+    "chromatic": [
+      1,
+      3
+    ],
+    "grain": [
+      0.03,
+      0.07
+    ],
+    "drift_x_cycles": [
+      1,
+      3
+    ],
+    "drift_y_cycles": [
+      0,
+      2
+    ]
+  }
+}

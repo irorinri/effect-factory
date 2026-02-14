@@ -1,0 +1,52 @@
+{
+  "name": "Confetti Pro Live",
+  "effect_id": "confetti_pro",
+  "loop_mode": true,
+  "output": {
+    "w": 1920,
+    "h": 1080,
+    "fps": 30,
+    "duration": 8.0,
+    "encoder": "h264_nvenc",
+    "nv_preset": "p4",
+    "bitrate": "16M"
+  },
+  "random": {
+    "base_seed": 24680,
+    "variant_mode": "counter"
+  },
+  "params": {
+    "density": [
+      0.8,
+      1.6
+    ],
+    "layers": [
+      2,
+      4
+    ],
+    "mblur_samples": [
+      2,
+      4
+    ],
+    "blur_far": [
+      1.0,
+      3.0
+    ],
+    "blur_mid": [
+      0.4,
+      1.6
+    ],
+    "blur_near": [
+      0.0,
+      0.6
+    ],
+    "glow": [
+      0.0,
+      0.6
+    ],
+    "grain": [
+      0.0,
+      0.05
+    ]
+  }
+}
