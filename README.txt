@@ -9,7 +9,7 @@ EffectFactory v2 (黒背景オーバーレイ素材 生成アプリ)
      ※ Tkinter は通常Python同梱
   3) ffmpeg を用意（PATHに通すか、UIでffmpeg.exeを指定）
   4) 実行:
-     python effect_factory_v2.py
+     python effect_factory.py
 
 出力:
   - *.mp4 : 黒背景素材（PV側で Screen/Add 合成）

@@ -1,0 +1,63 @@
+{
+  "name": "Sparkle Dust Live",
+  "effect_id": "sparkle_dust",
+  "loop_mode": true,
+  "output": {
+    "w": 1920,
+    "h": 1080,
+    "fps": 30,
+    "duration": 8.0,
+    "encoder": "h264_nvenc",
+    "nv_preset": "p4",
+    "bitrate": "10M"
+  },
+  "random": {
+    "base_seed": 31415,
+    "variant_mode": "counter"
+  },
+  "params": {
+    "count": [
+      180,
+      420
+    ],
+    "size_min": [
+      0.8,
+      1.8
+    ],
+    "size_max": [
+      2.6,
+      6.0
+    ],
+    "twinkle": [
+      0.4,
+      0.95
+    ],
+    "blur": [
+      0.3,
+      1.2
+    ],
+    "glow": [
+      0.2,
+      0.9
+    ],
+    "grain": [
+      0.0,
+      0.03
+    ],
+    "drift_x_cycles": [
+      0,
+      2
+    ],
+    "drift_y_cycles": [
+      0,
+      2
+    ],
+    "palette": {
+      "choices": [
+        "white",
+        "cool",
+        "warm"
+      ]
+    }
+  }
+}
