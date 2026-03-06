@@ -3,13 +3,8 @@ import numpy as np
 import os, sys
 
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, film_grain
+from _fxutil import add_glow, film_grain, frame_params, max_int, max_numeric, motion_direction_rad, rotate_vector
 
-# ------------------------------------------------------------
-# Sparkle Dust
-# - Floating sparkle particles on black background
-# - Loop-safe drift with integer screen cycles
-# ------------------------------------------------------------
 
 PALETTES = {
     "white": (1.00, 1.00, 1.00),
@@ -18,31 +13,30 @@ PALETTES = {
 }
 
 
+def _visible_fraction(target: float, index: int) -> float:
+    return float(np.clip(float(target) - float(index), 0.0, 1.0))
+
+
 def build_cache(w, h, frames, seed, params):
     rng = np.random.default_rng(int(seed) & 0x7FFFFFFF)
-
     loop = bool(params.get("__loop__", False))
-    count = int(params.get("count", 240))
-    size_min = float(params.get("size_min", 1.0))
-    size_max = float(params.get("size_max", 3.8))
-    twinkle = float(params.get("twinkle", 0.6))
-    drift_x = int(params.get("drift_x_cycles", 1))
-    drift_y = int(params.get("drift_y_cycles", 1))
-
-    pal_name = str(params.get("palette", "white"))
-    pr, pg, pb = PALETTES.get(pal_name, PALETTES["white"])
+    max_count = max(1, max_int(params, "count", 240))
+    max_drift_x = max(0.0, max_numeric(params, "drift_x_cycles", 1.0))
+    max_drift_y = max(0.0, max_numeric(params, "drift_y_cycles", 1.0))
 
     particles = []
-    for _ in range(max(1, count)):
-        x0 = float(rng.uniform(0, w))
-        y0 = float(rng.uniform(0, h))
-        kx = int(rng.integers(-drift_x, drift_x + 1)) if drift_x > 0 else 0
-        ky = int(rng.integers(-drift_y, drift_y + 1)) if drift_y > 0 else 0
-        freq = int(rng.integers(1, 5))
-        phase = float(rng.uniform(0, 2 * np.pi))
-        size = float(rng.uniform(size_min, size_max))
-        alpha = float(rng.uniform(0.15, 0.95))
-        particles.append((x0, y0, kx, ky, freq, phase, size, alpha))
+    for idx in range(max_count):
+        particles.append({
+            "index": idx,
+            "x0": float(rng.uniform(0, w)),
+            "y0": float(rng.uniform(0, h)),
+            "drift_fx": float(rng.uniform(-1.0, 1.0)) if max_drift_x > 0 else 0.0,
+            "drift_fy": float(rng.uniform(-1.0, 1.0)) if max_drift_y > 0 else 0.0,
+            "freq": float(rng.uniform(1.0, 5.0)),
+            "phase": float(rng.uniform(0, 2 * np.pi)),
+            "size_mix": float(rng.uniform(0.0, 1.0)),
+            "alpha": float(rng.uniform(0.15, 0.95)),
+        })
 
     return {
         "w": w,
@@ -52,14 +46,23 @@ def build_cache(w, h, frames, seed, params):
         "__frames__": int(params.get("__frames__", frames)),
         "seed": int(seed),
         "__loop__": loop,
-        "twinkle": twinkle,
         "particles": particles,
-        "color": (pr, pg, pb),
-        "blur": float(params.get("blur", 0.6)),
-        "glow": float(params.get("glow", 0.45)),
-        "grain": float(params.get("grain", 0.015)),
-        "brightness": float(params.get("brightness", 1.0)),
-        "speed": float(params.get("speed", 1.0)),
+        "max_count": max_count,
+        "defaults": {
+            "count": float(params.get("count", max_count)),
+            "size_min": float(params.get("size_min", 1.0)),
+            "size_max": float(params.get("size_max", 3.8)),
+            "twinkle": float(params.get("twinkle", 0.6)),
+            "blur": float(params.get("blur", 0.6)),
+            "glow": float(params.get("glow", 0.45)),
+            "grain": float(params.get("grain", 0.015)),
+            "brightness": float(params.get("brightness", 1.0)),
+            "speed": float(params.get("speed", 1.0)),
+            "motion_direction": float(params.get("motion_direction", 0.0)),
+            "drift_x_cycles": float(params.get("drift_x_cycles", 1.0)),
+            "drift_y_cycles": float(params.get("drift_y_cycles", 1.0)),
+            "palette": str(params.get("palette", "white")),
+        },
     }
 
 
@@ -71,31 +74,45 @@ def render_frame(cache, i):
     t_sec = i / float(fps)
     u = (i / float(max(1, n - 1))) if n > 1 else 0.0
     duration_sec = max(1.0 / fps, (n - 1) / float(fps))
-    speed = max(0.0, float(cache.get("speed", 1.0)))
+    params = frame_params(cache)
+    defaults = cache["defaults"]
+    speed = max(0.0, float(params.get("speed", defaults["speed"])))
 
     def phase_from_rate(rate_hz):
-        scaled_rate = rate_hz * speed
+        scaled_rate = float(rate_hz) * speed
         if loop:
-            if abs(scaled_rate) < 1e-9:
-                return 0.0
-            cycles = max(1, int(round(abs(scaled_rate) * duration_sec)))
-            return np.copysign(u * cycles, scaled_rate)
+            return scaled_rate * duration_sec * u
         return scaled_rate * t_sec
+
+    count = min(float(cache["max_count"]), max(0.0, float(params.get("count", defaults["count"]))))
+    size_min = max(0.1, float(params.get("size_min", defaults["size_min"])))
+    size_max = max(size_min, float(params.get("size_max", defaults["size_max"])))
+    twinkle = float(params.get("twinkle", defaults["twinkle"]))
+    drift_x = max(0.0, float(params.get("drift_x_cycles", defaults["drift_x_cycles"])))
+    drift_y = max(0.0, float(params.get("drift_y_cycles", defaults["drift_y_cycles"])))
+    palette_name = str(params.get("palette", defaults["palette"]))
+    pr, pg, pb = PALETTES.get(palette_name, PALETTES[defaults["palette"]])
+    motion_angle = motion_direction_rad(params, default=defaults["motion_direction"])
 
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     dr = ImageDraw.Draw(img)
 
-    pr, pg, pb = cache["color"]
-    twinkle = float(cache["twinkle"])
+    for particle in cache["particles"]:
+        vis = _visible_fraction(count, particle["index"])
+        if vis <= 0.0:
+            continue
 
-    for (x0, y0, kx, ky, freq, phase, size, alpha) in cache["particles"]:
-        x = (x0 + w * phase_from_rate(kx)) % w
-        y = (y0 + h * phase_from_rate(ky)) % h
+        dx, dy = rotate_vector(
+            w * phase_from_rate(particle["drift_fx"] * drift_x),
+            h * phase_from_rate(particle["drift_fy"] * drift_y),
+            motion_angle,
+        )
+        x = (particle["x0"] + dx) % w
+        y = (particle["y0"] + dy) % h
 
-        pulse = 0.5 + 0.5 * np.sin(2 * np.pi * phase_from_rate(freq) + phase)
-        intensity = alpha * ((1.0 - twinkle) + twinkle * pulse)
-
-        r = size * (0.75 + 0.45 * pulse)
+        pulse = 0.5 + 0.5 * np.sin(2.0 * np.pi * phase_from_rate(particle["freq"]) + particle["phase"])
+        intensity = particle["alpha"] * vis * ((1.0 - twinkle) + twinkle * pulse)
+        r = (size_min + particle["size_mix"] * (size_max - size_min)) * (0.75 + 0.45 * pulse)
         a = int(np.clip(255 * intensity, 0, 255))
         col = (
             int(np.clip(255 * pr, 0, 255)),
@@ -105,22 +122,23 @@ def render_frame(cache, i):
         )
         dr.ellipse((x - r, y - r, x + r, y + r), fill=col)
 
-    blur = float(cache["blur"])
+    blur = max(0.0, float(params.get("blur", defaults["blur"])))
     if blur > 0:
         img = img.filter(ImageFilter.GaussianBlur(radius=blur))
 
     out = Image.alpha_composite(Image.new("RGBA", (w, h), (0, 0, 0, 255)), img).convert("RGB")
 
-    glow = float(cache["glow"])
+    glow = max(0.0, float(params.get("glow", defaults["glow"])))
     if glow > 0:
         out = add_glow(out, radius=4.0, strength=glow)
 
-    grain = float(cache["grain"])
+    grain = max(0.0, float(params.get("grain", defaults["grain"])))
     if grain > 0:
         out = film_grain(out, amount=grain, seed=cache["seed"] + i * 23)
 
-    if cache["brightness"] != 1.0:
-        out = ImageEnhance.Brightness(out).enhance(float(cache["brightness"]))
+    brightness = float(params.get("brightness", defaults["brightness"]))
+    if brightness != 1.0:
+        out = ImageEnhance.Brightness(out).enhance(brightness)
 
     return out
 
@@ -129,18 +147,19 @@ EFFECT = {
     "id": "sparkle_dust",
     "name": "Sparkle Dust",
     "params": [
-        {"key": "count", "label": "count", "type": "int", "default": 240, "min": 16, "max": 1200, "step": 8},
-        {"key": "size_min", "label": "size min", "type": "float", "default": 1.0, "min": 0.4, "max": 10.0, "step": 0.1},
-        {"key": "size_max", "label": "size max", "type": "float", "default": 3.8, "min": 0.8, "max": 24.0, "step": 0.2},
-        {"key": "twinkle", "label": "twinkle", "type": "float", "default": 0.6, "min": 0.0, "max": 1.0, "step": 0.02},
-        {"key": "blur", "label": "blur", "type": "float", "default": 0.6, "min": 0.0, "max": 4.0, "step": 0.1},
-        {"key": "glow", "label": "glow", "type": "float", "default": 0.45, "min": 0.0, "max": 2.0, "step": 0.05},
-        {"key": "grain", "label": "grain", "type": "float", "default": 0.015, "min": 0.0, "max": 0.2, "step": 0.005},
-        {"key": "brightness", "label": "brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 2.0, "step": 0.05},
-        {"key": "speed", "label": "speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05},
-        {"key": "drift_x_cycles", "label": "drift x cycles", "type": "int", "default": 1, "min": 0, "max": 6, "step": 1},
-        {"key": "drift_y_cycles", "label": "drift y cycles", "type": "int", "default": 1, "min": 0, "max": 6, "step": 1},
-        {"key": "palette", "label": "palette", "type": "choice", "default": "white", "choices": ["white", "cool", "warm"]},
+        {"key": "count", "label": "Count", "type": "int", "default": 240, "min": 16, "max": 1200, "step": 8},
+        {"key": "size_min", "label": "Size Min", "type": "float", "default": 1.0, "min": 0.4, "max": 10.0, "step": 0.1},
+        {"key": "size_max", "label": "Size Max", "type": "float", "default": 3.8, "min": 0.8, "max": 24.0, "step": 0.2},
+        {"key": "twinkle", "label": "Twinkle", "type": "float", "default": 0.6, "min": 0.0, "max": 1.0, "step": 0.02},
+        {"key": "blur", "label": "Blur", "type": "float", "default": 0.6, "min": 0.0, "max": 4.0, "step": 0.1},
+        {"key": "glow", "label": "Glow", "type": "float", "default": 0.45, "min": 0.0, "max": 2.0, "step": 0.05},
+        {"key": "grain", "label": "Grain", "type": "float", "default": 0.015, "min": 0.0, "max": 0.2, "step": 0.005},
+        {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 2.0, "step": 0.05},
+        {"key": "speed", "label": "Speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05},
+        {"key": "motion_direction", "label": "Motion Direction", "type": "float", "default": 0.0, "min": -180.0, "max": 180.0, "step": 1.0},
+        {"key": "drift_x_cycles", "label": "Drift X Cycles", "type": "int", "default": 1, "min": 0, "max": 6, "step": 1},
+        {"key": "drift_y_cycles", "label": "Drift Y Cycles", "type": "int", "default": 1, "min": 0, "max": 6, "step": 1},
+        {"key": "palette", "label": "Palette", "type": "choice", "default": "white", "choices": ["white", "cool", "warm"]},
     ],
     "build_cache": build_cache,
     "render_frame": render_frame,

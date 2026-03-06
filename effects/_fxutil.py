@@ -4,6 +4,60 @@ from PIL import Image, ImageFilter
 def clamp01(x):
     return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
 
+def timeline_markers(source) -> list[dict]:
+    if not isinstance(source, dict):
+        return []
+    timeline = source.get("__timeline__")
+    if not isinstance(timeline, dict):
+        return []
+    markers = timeline.get("markers")
+    return markers if isinstance(markers, list) else []
+
+def timeline_values(source, key: str, default=None):
+    values = []
+    if isinstance(source, dict) and key in source:
+        values.append(source.get(key, default))
+    for marker in timeline_markers(source):
+        if not isinstance(marker, dict):
+            continue
+        params = marker.get("params")
+        if isinstance(params, dict) and key in params:
+            values.append(params.get(key, default))
+    if not values:
+        values.append(default)
+    return values
+
+def max_numeric(source, key: str, default: float = 0.0) -> float:
+    vals = []
+    for value in timeline_values(source, key, default):
+        try:
+            vals.append(float(value))
+        except Exception:
+            continue
+    if not vals:
+        return float(default)
+    return max(vals)
+
+def min_numeric(source, key: str, default: float = 0.0) -> float:
+    vals = []
+    for value in timeline_values(source, key, default):
+        try:
+            vals.append(float(value))
+        except Exception:
+            continue
+    if not vals:
+        return float(default)
+    return min(vals)
+
+def max_int(source, key: str, default: int = 0) -> int:
+    return int(np.ceil(max_numeric(source, key, float(default))))
+
+def frame_params(cache: dict) -> dict:
+    params = cache.get("__runtime_params__") if isinstance(cache, dict) else None
+    if isinstance(params, dict):
+        return params
+    return cache if isinstance(cache, dict) else {}
+
 def pil_to_f32(img: Image.Image) -> np.ndarray:
     arr = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
     return arr
@@ -11,6 +65,16 @@ def pil_to_f32(img: Image.Image) -> np.ndarray:
 def f32_to_pil(arr: np.ndarray) -> Image.Image:
     arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
     return Image.fromarray(arr, mode="RGB")
+
+def motion_direction_rad(source, key: str = "motion_direction", default: float = 0.0) -> float:
+    return np.deg2rad(float(source.get(key, default)))
+
+def rotate_vector(x: float, y: float, angle_rad: float) -> tuple[float, float]:
+    if abs(angle_rad) < 1e-9:
+        return x, y
+    ca = float(np.cos(angle_rad))
+    sa = float(np.sin(angle_rad))
+    return (x * ca - y * sa, x * sa + y * ca)
 
 def add_glow(img: Image.Image, radius: float = 6.0, strength: float = 0.8) -> Image.Image:
     """Glow by blurring and adding back (black background friendly)."""

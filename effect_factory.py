@@ -200,7 +200,12 @@ class ScrollableFrame(ttk.Frame):
 
 class EffectFactoryApp(tk.Tk):
     THUMB_SIZE = (132, 74)
+    GALLERY_COLUMNS = 3
+    GALLERY_GAP = 8
+    GALLERY_MIN_THUMB_WIDTH = 88
     HISTORY_MAX = 30
+    TIMELINE_MARKERS = ("X", "Y", "Z")
+    TIMELINE_MARKER_COLORS = {"X": "#ff8a5b", "Y": "#5bc0eb", "Z": "#9bde6d"}
 
     def __init__(self):
         super().__init__()
@@ -216,6 +221,18 @@ class EffectFactoryApp(tk.Tk):
         self._history = []
         self._history_index = -1
         self._history_sig = None
+        self.timeline_position = tk.DoubleVar(value=0.0)
+        self.timeline_status = tk.StringVar(value="X / Y / Z に現在の見た目を保存できます")
+        self.timeline_time_text = tk.StringVar(value="0.00s / 0.00s")
+        self.timeline_markers = {}
+        self.timeline_selected_marker = None
+        self.timeline_playing = False
+        self.timeline_marker_buttons = []
+        self._timeline_after_id = None
+        self._timeline_last_tick = None
+        self._timeline_dragging = False
+        self._preview_runtime_lock = threading.Lock()
+        self._preview_runtime = {"playhead_sec": 0.0, "playing": False}
 
         root = os.path.dirname(os.path.abspath(__file__))
         self.effects_dir = os.path.join(root, "effects")
@@ -251,6 +268,7 @@ class EffectFactoryApp(tk.Tk):
         self.show_log = tk.BooleanVar(value=False)
         self.preview_status = tk.StringVar(value="プレビュー待機中")
         self.preview_info = tk.StringVar(value="左で見た目を選び、右で少し調整します")
+        self.selection_summary = tk.StringVar(value="")
         self.gallery_filter = tk.StringVar(value="すべて")
         self.gallery_search = tk.StringVar(value="")
         self.random_strength = tk.StringVar(value="ふつう")
@@ -277,6 +295,8 @@ class EffectFactoryApp(tk.Tk):
         self.thumb_cache = {}
         self.gallery_widgets = {}
         self.gallery_photo_refs = {}
+        self._gallery_thumb_size = self.THUMB_SIZE
+        self._gallery_layout_after_id = None
         self._thumb_request_q = queue.Queue()
         self._thumb_ready_q = queue.Queue()
         self._thumb_pending = set()
@@ -296,6 +316,8 @@ class EffectFactoryApp(tk.Tk):
         self._sync_variant_from_state(force=True)
         self._update_random_ui_state()
         self._refresh_gallery_selection()
+        self._refresh_timeline_ui()
+        self._sync_preview_runtime_from_ui()
         self._push_history("initial")
 
         self._setup_live_preview_traces()
@@ -348,6 +370,9 @@ class EffectFactoryApp(tk.Tk):
         ttk.Combobox(tools, textvariable=self.gallery_filter, state="readonly", values=["すべて", "Particles", "Glow", "Lines", "Noise", "Abstract", "Overlay向け", "背景向け"], width=12).pack(side="left", padx=(8, 0))
         self.gallery_scroll = ScrollableFrame(parent)
         self.gallery_scroll.grid(row=1, column=0, sticky="nsew")
+        self.gallery_grid = tk.Frame(self.gallery_scroll.interior, bg="#121820", bd=0, highlightthickness=0)
+        self.gallery_grid.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+        self.gallery_scroll.canvas.bind("<Configure>", self._on_gallery_canvas_resize, add="+")
         self.gallery_search.trace_add("write", lambda *_: self._rebuild_gallery())
         self.gallery_filter.trace_add("write", lambda *_: self._rebuild_gallery())
 
@@ -394,7 +419,12 @@ class EffectFactoryApp(tk.Tk):
         self.selected_title = ttk.Label(selected, text="-", font=("", 16, "bold"))
         self.selected_title.pack(anchor="w", padx=10, pady=(10, 2))
         self.selected_meta = ttk.Label(selected, text="", foreground="#8899a7")
-        self.selected_meta.pack(anchor="w", padx=10, pady=(0, 10))
+        self.selected_meta.pack(anchor="w", padx=10, pady=(0, 6))
+        copy_row = ttk.Frame(selected)
+        copy_row.pack(fill="x", padx=10, pady=(0, 4))
+        ttk.Label(copy_row, text="Codex用テキスト", foreground="#8899a7").pack(side="left")
+        ttk.Button(copy_row, text="コピー", command=self._copy_selection_summary).pack(side="right")
+        ttk.Entry(selected, textvariable=self.selection_summary, state="readonly").pack(fill="x", padx=10, pady=(0, 10))
 
         mode = ttk.LabelFrame(body, text="調整")
         mode.pack(fill="x", pady=(0, 10))
@@ -447,8 +477,39 @@ class EffectFactoryApp(tk.Tk):
     def _build_footer(self, parent):
         foot = ttk.LabelFrame(parent, text="書き出し")
         foot.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+
+        timeline = ttk.LabelFrame(foot, text="変化タイムライン")
+        timeline.pack(fill="x", padx=10, pady=(10, 8))
+        bar = ttk.Frame(timeline)
+        bar.pack(fill="x", padx=10, pady=(10, 4))
+        self.btn_timeline_play = ttk.Button(bar, text="再生", command=self._toggle_timeline_play)
+        self.btn_timeline_play.pack(side="left")
+        self.btn_timeline_home = ttk.Button(bar, text="先頭へ", command=lambda: (self._set_timeline_playing(False), self._set_timeline_position(0.0)))
+        self.btn_timeline_home.pack(side="left", padx=(8, 0))
+        ttk.Label(bar, textvariable=self.timeline_time_text, width=18).pack(side="left", padx=(12, 8))
+        ttk.Label(bar, textvariable=self.timeline_status, foreground="#8fa0ad").pack(side="left")
+
+        marker_row = ttk.Frame(timeline)
+        marker_row.pack(fill="x", padx=10, pady=(0, 6))
+        ttk.Label(marker_row, text="現在位置を保存").pack(side="left")
+        self.timeline_marker_buttons = []
+        for label in self.TIMELINE_MARKERS:
+            btn = ttk.Button(marker_row, text=f"{label}保存", command=lambda m=label: self._save_timeline_marker(m))
+            btn.pack(side="left", padx=(8, 0))
+            self.timeline_marker_buttons.append(btn)
+        self.btn_timeline_clear = ttk.Button(marker_row, text="全消去", command=lambda: self._clear_timeline_markers(schedule_history=True))
+        self.btn_timeline_clear.pack(side="left", padx=(12, 0))
+        ttk.Label(marker_row, text="マーカーを押すと、その時点のスライダー値を記憶します。", foreground="#7d8d9a").pack(side="left", padx=(12, 0))
+
+        self.timeline_canvas = tk.Canvas(timeline, height=72, bg="#10161d", bd=0, highlightthickness=0, cursor="hand2")
+        self.timeline_canvas.pack(fill="x", padx=10, pady=(0, 10))
+        self.timeline_canvas.bind("<Configure>", lambda _e: self._refresh_timeline_ui())
+        self.timeline_canvas.bind("<Button-1>", self._on_timeline_press)
+        self.timeline_canvas.bind("<B1-Motion>", self._on_timeline_drag)
+        self.timeline_canvas.bind("<ButtonRelease-1>", self._on_timeline_release)
+
         actions = ttk.Frame(foot)
-        actions.pack(fill="x", padx=10, pady=(10, 6))
+        actions.pack(fill="x", padx=10, pady=(0, 6))
         self.btn_preview = ttk.Button(actions, text="プレビュー生成", command=self._on_preview)
         self.btn_preview.pack(side="left")
         self.btn_make = ttk.Button(actions, text="本生成", command=self._on_generate)
@@ -466,6 +527,37 @@ class EffectFactoryApp(tk.Tk):
             ("Overlay販売向け", {"w": 1920, "h": 1080, "fps": 30, "duration": 10.0, "bitrate": "14M", "file_prefix": "overlay"}),
         ]:
             ttk.Button(presets, text=label, command=lambda c=cfg, n=label: self._apply_quick_export(n, c)).pack(side="left", padx=(8, 0))
+        settings = ttk.Frame(foot)
+        settings.pack(fill="x", padx=10, pady=(0, 8))
+        row1 = ttk.Frame(settings)
+        row1.pack(fill="x", pady=(0, 6))
+        ttk.Label(row1, text="出力先", width=8).pack(side="left")
+        ttk.Entry(row1, textvariable=self.output_dir).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ttk.Label(row1, text="接頭辞").pack(side="left")
+        ttk.Entry(row1, textvariable=self.file_prefix, width=14).pack(side="left", padx=(4, 0))
+
+        row2 = ttk.Frame(settings)
+        row2.pack(fill="x", pady=(0, 6))
+        ttk.Label(row2, text="幅").pack(side="left")
+        ttk.Spinbox(row2, from_=16, to=8192, increment=16, textvariable=self.w, width=8).pack(side="left", padx=(4, 8))
+        ttk.Label(row2, text="高さ").pack(side="left")
+        ttk.Spinbox(row2, from_=16, to=8192, increment=16, textvariable=self.h, width=8).pack(side="left", padx=(4, 8))
+        ttk.Label(row2, text="FPS").pack(side="left")
+        ttk.Spinbox(row2, from_=1, to=120, increment=1, textvariable=self.fps, width=6).pack(side="left", padx=(4, 8))
+        ttk.Label(row2, text="秒数").pack(side="left")
+        ttk.Spinbox(row2, from_=1.0, to=120.0, increment=0.5, textvariable=self.duration, width=8).pack(side="left", padx=(4, 8))
+        ttk.Checkbutton(row2, text="ループ", variable=self.loop_mode).pack(side="left")
+
+        row3 = ttk.Frame(settings)
+        row3.pack(fill="x", pady=(0, 4))
+        ttk.Label(row3, text="ffmpeg").pack(side="left")
+        ttk.Entry(row3, textvariable=self.ffmpeg_path, width=12).pack(side="left", padx=(4, 8))
+        ttk.Label(row3, text="Encoder").pack(side="left")
+        ttk.Combobox(row3, textvariable=self.encoder, state="readonly", values=["h264_nvenc", "libx264"], width=12).pack(side="left", padx=(4, 8))
+        ttk.Label(row3, text="Preset").pack(side="left")
+        ttk.Combobox(row3, textvariable=self.nv_preset, state="readonly", values=["p1", "p2", "p3", "p4", "p5", "p6", "p7"], width=6).pack(side="left", padx=(4, 8))
+        ttk.Label(row3, text="Bitrate").pack(side="left")
+        ttk.Entry(row3, textvariable=self.bitrate, width=10).pack(side="left", padx=(4, 0))
         self.pbar = ttk.Progressbar(foot, mode="determinate", maximum=100)
         self.pbar.pack(fill="x", padx=10, pady=(0, 10))
 
@@ -481,6 +573,239 @@ class EffectFactoryApp(tk.Tk):
         self.log = tk.Text(self.log_box, height=7, bg="#10161d", fg="#dfe8ef", insertbackground="#ffffff")
         self.log.pack(fill="both", expand=True, padx=10, pady=10)
         self._toggle_log(force=False)
+
+    def _format_seconds(self, seconds: float) -> str:
+        seconds = max(0.0, float(seconds))
+        if seconds >= 60.0:
+            minutes = int(seconds // 60)
+            remain = seconds - minutes * 60
+            return f"{minutes}:{remain:05.2f}"
+        return f"{seconds:.2f}s"
+
+    def _timeline_duration(self) -> float:
+        return max(0.1, float(self.duration.get()))
+
+    def _clone_timeline_marker(self, marker):
+        return {
+            "time_sec": float(marker.get("time_sec", 0.0)),
+            "params": dict(marker.get("params", {})),
+            "param_overrides": list(marker.get("param_overrides", [])),
+        }
+
+    def _active_timeline_markers(self):
+        order = {label: idx for idx, label in enumerate(self.TIMELINE_MARKERS)}
+        out = []
+        for label in self.TIMELINE_MARKERS:
+            marker = self.timeline_markers.get(label)
+            if not marker:
+                continue
+            item = self._clone_timeline_marker(marker)
+            item["label"] = label
+            item["time_sec"] = min(self._timeline_duration(), max(0.0, float(item["time_sec"])))
+            out.append(item)
+        out.sort(key=lambda item: (item["time_sec"], order[item["label"]]))
+        return out
+
+    def _sync_preview_runtime_from_ui(self):
+        with self._preview_runtime_lock:
+            self._preview_runtime["playhead_sec"] = float(self.timeline_position.get())
+            self._preview_runtime["playing"] = bool(self.timeline_playing)
+
+    def _set_timeline_position(self, seconds: float, redraw: bool = True):
+        seconds = min(self._timeline_duration(), max(0.0, float(seconds)))
+        self.timeline_position.set(round(seconds, 4))
+        self._sync_preview_runtime_from_ui()
+        if redraw:
+            self._refresh_timeline_ui()
+
+    def _timeline_canvas_bounds(self):
+        if not hasattr(self, "timeline_canvas") or not self.timeline_canvas.winfo_exists():
+            return 16, 104, 120
+        width = max(120, int(self.timeline_canvas.winfo_width()))
+        return 16, max(17, width - 16), width
+
+    def _timeline_seconds_to_x(self, seconds: float) -> float:
+        left, right, _ = self._timeline_canvas_bounds()
+        duration = self._timeline_duration()
+        if right <= left:
+            return float(left)
+        ratio = min(1.0, max(0.0, float(seconds) / duration))
+        return left + (right - left) * ratio
+
+    def _timeline_x_to_seconds(self, x: float) -> float:
+        left, right, _ = self._timeline_canvas_bounds()
+        if right <= left:
+            return 0.0
+        ratio = (float(x) - left) / max(1.0, right - left)
+        return min(self._timeline_duration(), max(0.0, ratio * self._timeline_duration()))
+
+    def _refresh_timeline_ui(self):
+        duration = self._timeline_duration()
+        pos = min(duration, max(0.0, float(self.timeline_position.get())))
+        if abs(pos - float(self.timeline_position.get())) > 1e-6:
+            self.timeline_position.set(round(pos, 4))
+            self._sync_preview_runtime_from_ui()
+        self.timeline_time_text.set(f"{self._format_seconds(pos)} / {self._format_seconds(duration)}")
+        if hasattr(self, "btn_timeline_play") and self.btn_timeline_play.winfo_exists():
+            self.btn_timeline_play.configure(text=("停止" if self.timeline_playing else "再生"))
+        if hasattr(self, "timeline_canvas") and self.timeline_canvas.winfo_exists():
+            self._draw_timeline()
+
+    def _draw_timeline(self):
+        canvas = self.timeline_canvas
+        canvas.delete("all")
+        left, right, _ = self._timeline_canvas_bounds()
+        y = 38
+        duration = self._timeline_duration()
+        playhead_x = self._timeline_seconds_to_x(float(self.timeline_position.get()))
+        canvas.create_line(left, y, right, y, fill="#42505e", width=4, capstyle="round")
+        canvas.create_line(left, y, playhead_x, y, fill="#86c5ff", width=4, capstyle="round")
+        canvas.create_line(playhead_x, y - 18, playhead_x, y + 18, fill="#f2f6fb", width=2)
+        canvas.create_oval(playhead_x - 5, y - 5, playhead_x + 5, y + 5, fill="#f2f6fb", outline="")
+        for item in self._active_timeline_markers():
+            mx = self._timeline_seconds_to_x(item["time_sec"])
+            color = self.TIMELINE_MARKER_COLORS.get(item["label"], "#dfe8ef")
+            selected = item["label"] == self.timeline_selected_marker
+            outline = "#f7fbff" if selected else "#10161d"
+            text_color = "#10161d" if selected else "#f7fbff"
+            canvas.create_polygon(mx, y - 14, mx + 11, y, mx, y + 14, mx - 11, y, fill=color, outline=outline, width=(2 if selected else 1))
+            canvas.create_text(mx, y, text=item["label"], fill=text_color, font=("", 10, "bold"))
+            canvas.create_text(mx, y - 22, text=self._format_seconds(item["time_sec"]), fill=color, font=("", 9))
+        canvas.create_text(left, y + 24, text="0s", anchor="w", fill="#8fa0ad", font=("", 9))
+        canvas.create_text(right, y + 24, text=self._format_seconds(duration), anchor="e", fill="#8fa0ad", font=("", 9))
+
+    def _find_timeline_marker_hit(self, x: float, y: float):
+        if abs(float(y) - 38.0) > 24.0:
+            return None
+        for item in self._active_timeline_markers():
+            if abs(float(x) - self._timeline_seconds_to_x(item["time_sec"])) <= 12.0:
+                return item["label"]
+        return None
+
+    def _on_timeline_press(self, evt):
+        if self.busy:
+            return
+        self._set_timeline_playing(False)
+        self._timeline_dragging = True
+        hit = self._find_timeline_marker_hit(evt.x, evt.y)
+        if hit:
+            self._select_timeline_marker(hit, apply_snapshot=True, move_playhead=True)
+            return
+        self.timeline_selected_marker = None
+        self.timeline_status.set("再生位置を移動しました")
+        self._set_timeline_position(self._timeline_x_to_seconds(evt.x))
+
+    def _on_timeline_drag(self, evt):
+        if self.busy or not self._timeline_dragging:
+            return
+        self.timeline_selected_marker = None
+        self.timeline_status.set("再生位置をスクラブ中です")
+        self._set_timeline_position(self._timeline_x_to_seconds(evt.x))
+
+    def _on_timeline_release(self, _evt):
+        self._timeline_dragging = False
+        self._refresh_timeline_ui()
+
+    def _set_timeline_playing(self, playing: bool):
+        playing = bool(playing) and bool(self.live_preview.get()) and not self.busy
+        if self._timeline_after_id is not None:
+            try:
+                self.after_cancel(self._timeline_after_id)
+            except Exception:
+                pass
+            self._timeline_after_id = None
+        self.timeline_playing = playing
+        self._timeline_last_tick = time.perf_counter()
+        self._sync_preview_runtime_from_ui()
+        self._refresh_timeline_ui()
+        if self.timeline_playing:
+            self._timeline_after_id = self.after(33, self._timeline_tick)
+
+    def _toggle_timeline_play(self):
+        self._set_timeline_playing(not self.timeline_playing)
+
+    def _timeline_tick(self):
+        self._timeline_after_id = None
+        if not self.timeline_playing or self._preview_stop_evt.is_set():
+            return
+        now = time.perf_counter()
+        prev = self._timeline_last_tick or now
+        self._timeline_last_tick = now
+        duration = self._timeline_duration()
+        new_pos = float(self.timeline_position.get()) + max(0.0, now - prev)
+        reached_end = new_pos >= duration
+        if reached_end:
+            if bool(self.loop_mode.get()):
+                new_pos = new_pos % max(0.1, duration)
+            else:
+                new_pos = duration
+        self._set_timeline_position(new_pos)
+        if reached_end and not bool(self.loop_mode.get()):
+            self.timeline_playing = False
+            self._sync_preview_runtime_from_ui()
+            self._refresh_timeline_ui()
+            return
+        self._timeline_after_id = self.after(33, self._timeline_tick)
+
+    def _save_timeline_marker(self, label: str):
+        self.timeline_markers[label] = {
+            "time_sec": float(self.timeline_position.get()),
+            "params": self._collect_fixed_params(),
+            "param_overrides": sorted(self.param_overrides),
+        }
+        self.timeline_selected_marker = label
+        self.timeline_status.set(f"マーカー{label} を {self._format_seconds(self.timeline_markers[label]['time_sec'])} に保存しました")
+        self._refresh_timeline_ui()
+        self._schedule_history("edit")
+        self._request_preview_rebuild(immediate=True)
+
+    def _clear_timeline_markers(self, message: str = None, request_preview: bool = True, schedule_history: bool = False):
+        had_markers = bool(self.timeline_markers)
+        self.timeline_markers = {}
+        self.timeline_selected_marker = None
+        self.timeline_status.set(message or "X / Y / Z に現在の見た目を保存できます")
+        self._refresh_timeline_ui()
+        if had_markers:
+            if schedule_history:
+                self._schedule_history("edit")
+            if request_preview:
+                self._request_preview_rebuild(immediate=True)
+
+    def _apply_timeline_marker_to_ui(self, label: str):
+        marker = self.timeline_markers.get(label)
+        if not marker:
+            return
+        self._ui_restoring = True
+        try:
+            self.param_overrides = set(marker.get("param_overrides", []))
+            for key, value in marker.get("params", {}).items():
+                if key in self.param_vars:
+                    self.param_vars[key].set(value)
+        finally:
+            self._ui_restoring = False
+
+    def _select_timeline_marker(self, label: str, apply_snapshot: bool = True, move_playhead: bool = True):
+        marker = self.timeline_markers.get(label)
+        if not marker:
+            return
+        self.timeline_selected_marker = label
+        if move_playhead:
+            self._set_timeline_position(float(marker.get("time_sec", 0.0)), redraw=False)
+        if apply_snapshot:
+            self._apply_timeline_marker_to_ui(label)
+        self.timeline_status.set(f"マーカー{label} を編集中 ({self._format_seconds(marker.get('time_sec', 0.0))})")
+        self._refresh_timeline_ui()
+        self._request_preview_rebuild(immediate=True)
+
+    def _sync_selected_marker_from_ui(self):
+        label = self.timeline_selected_marker
+        if self._ui_restoring or not label or label not in self.timeline_markers:
+            return
+        marker = self.timeline_markers[label]
+        marker["params"] = self._collect_fixed_params()
+        marker["param_overrides"] = sorted(self.param_overrides)
+        self.timeline_status.set(f"マーカー{label} を更新中 ({self._format_seconds(marker['time_sec'])})")
+        self._refresh_timeline_ui()
 
     def _toggle_log(self, force=None):
         if force is None:
@@ -507,37 +832,70 @@ class EffectFactoryApp(tk.Tk):
             items.append({"kind": "effect", "id": effect_id, "title": plugin.name, "effect_id": effect_id, "plugin_name": plugin.name, "category": _effect_category(effect_id, plugin.name), "usage": _effect_usage(effect_id, plugin.name)})
         return items
 
+    def _gallery_thumb_dims(self):
+        width = self.gallery_scroll.canvas.winfo_width()
+        if width <= 1:
+            width = self.gallery_scroll.winfo_width()
+        gap_total = self.GALLERY_GAP * (self.GALLERY_COLUMNS - 1)
+        usable = max(width - 12, self.GALLERY_MIN_THUMB_WIDTH * self.GALLERY_COLUMNS + gap_total)
+        thumb_w = max(self.GALLERY_MIN_THUMB_WIDTH, (usable - gap_total) // self.GALLERY_COLUMNS)
+        thumb_w = min(thumb_w, self.THUMB_SIZE[0])
+        thumb_h = max(50, round(thumb_w * self.THUMB_SIZE[1] / self.THUMB_SIZE[0]))
+        return thumb_w, thumb_h
+
+    def _on_gallery_canvas_resize(self, _evt=None):
+        if self._gallery_layout_after_id is not None:
+            self.after_cancel(self._gallery_layout_after_id)
+        self._gallery_layout_after_id = self.after(80, self._refresh_gallery_layout)
+
+    def _refresh_gallery_layout(self):
+        self._gallery_layout_after_id = None
+        thumb_size = self._gallery_thumb_dims()
+        if thumb_size != self._gallery_thumb_size:
+            self._rebuild_gallery()
+
     def _rebuild_gallery(self):
-        for c in self.gallery_scroll.interior.winfo_children():
+        for c in self.gallery_grid.winfo_children():
             c.destroy()
         self.gallery_widgets.clear()
         self.gallery_photo_refs.clear()
+        self._gallery_thumb_size = self._gallery_thumb_dims()
+        for col in range(self.GALLERY_COLUMNS):
+            self.gallery_grid.grid_columnconfigure(col, weight=1, uniform="gallery")
         q = self.gallery_search.get().strip().lower()
         f = self.gallery_filter.get()
+        index = 0
         for item in self._gallery_items():
             text = " ".join([item["title"], item["plugin_name"], item["category"], item["usage"]]).lower()
             if q and q not in text:
                 continue
             if f != "すべて" and f not in [item["category"], item["usage"]]:
                 continue
-            card = ttk.Frame(self.gallery_scroll.interior)
-            card.pack(fill="x", pady=(0, 8))
+            row, col = divmod(index, self.GALLERY_COLUMNS)
+            card = tk.Frame(self.gallery_grid, bg="#121820", bd=0, highlightthickness=0)
+            padx = (
+                0 if col == 0 else self.GALLERY_GAP // 2,
+                0 if col == self.GALLERY_COLUMNS - 1 else self.GALLERY_GAP // 2,
+            )
+            card.grid(row=row, column=col, sticky="nsew", padx=padx, pady=(0, self.GALLERY_GAP))
             thumb = tk.Label(
                 card,
                 bg="#1c2630",
                 fg="#dfe8ef",
-                width=self.THUMB_SIZE[0],
-                height=self.THUMB_SIZE[1],
+                width=self._gallery_thumb_size[0],
+                height=self._gallery_thumb_size[1],
                 text="loading",
                 relief="flat",
                 bd=3,
                 cursor="hand2",
             )
-            thumb.pack(fill="x", expand=True)
+            thumb.pack(fill="both", expand=True)
+            card.bind("<Button-1>", lambda _e, i=item: self._select_gallery_item(i))
             thumb.bind("<Button-1>", lambda _e, i=item: self._select_gallery_item(i))
             key = (item["kind"], item["id"])
             self.gallery_widgets[key] = (card, thumb)
             self._queue_thumb(item)
+            index += 1
         self._refresh_gallery_selection()
 
     def _queue_thumb(self, item):
@@ -603,7 +961,8 @@ class EffectFactoryApp(tk.Tk):
         if key not in self.gallery_widgets:
             return
         _card, thumb = self.gallery_widgets[key]
-        photo = ImageTk.PhotoImage(img)
+        fitted = ImageOps.fit(img, self._gallery_thumb_size, method=Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(fitted)
         thumb.configure(image=photo, text="")
         thumb.image = photo
         self.gallery_photo_refs[key] = photo
@@ -619,6 +978,7 @@ class EffectFactoryApp(tk.Tk):
             self.param_overrides.clear()
             self._rebuild_param_ui()
             self._update_selection_labels()
+            self._clear_timeline_markers(message="見た目変更に合わせてタイムラインを初期化しました", request_preview=False, schedule_history=False)
             self._request_preview_rebuild()
         self._refresh_gallery_selection()
         self._schedule_history("select")
@@ -640,7 +1000,26 @@ class EffectFactoryApp(tk.Tk):
         usage = _effect_usage(plugin.id, plugin.name)
         self.selected_title.configure(text=(preset.get("name") if preset else plugin.name))
         self.selected_meta.configure(text=f"{category} / {usage} / effect: {plugin.name}")
-        self.preview_info.set(f"{plugin.name} を表示中。かんたん調整を触るとプレビューへ自動反映します。")
+        summary_parts = [
+            f"preset={preset.get('name') if preset else '(none)'}",
+            f"effect_id={plugin.id}",
+            f"effect_name={plugin.name}",
+            f"category={category}",
+            f"usage={usage}",
+            "params=" + ", ".join(p["key"] for p in plugin.params),
+        ]
+        self.selection_summary.set(" | ".join(summary_parts))
+        self.preview_info.set(f"{plugin.name} を表示中。下のタイムラインで X / Y / Z に変化も記憶できます。")
+
+    def _copy_selection_summary(self):
+        try:
+            text = self.selection_summary.get().strip()
+            if not text:
+                return
+            self.clipboard_clear(); self.clipboard_append(text)
+            self._log("[INFO] copied selection summary")
+        except Exception as e:
+            self.msgq.put(("err", str(e)))
 
     def _on_preset_change(self, *_args, push_history=True):
         self.presets = load_presets(self.presets_dir)
@@ -651,6 +1030,7 @@ class EffectFactoryApp(tk.Tk):
         self._update_selection_labels()
         self.selected_gallery_key = ("preset", self.preset_name.get())
         self._refresh_gallery_selection()
+        self._clear_timeline_markers(message="プリセット変更に合わせてタイムラインを初期化しました", request_preview=False, schedule_history=False)
         self._on_randomize_toggle()
         if push_history:
             self._schedule_history("preset")
@@ -711,13 +1091,20 @@ class EffectFactoryApp(tk.Tk):
     def _on_param_var_changed(self, key):
         if not self._ui_restoring:
             self.param_overrides.add(key)
+            if self.timeline_selected_marker and self.timeline_selected_marker in self.timeline_markers:
+                self._sync_selected_marker_from_ui()
+            elif self.timeline_markers:
+                self.timeline_status.set("未保存の調整です。必要なら X / Y / Z で現在位置へ記憶してください")
+                self._refresh_timeline_ui()
         self._on_ui_value_changed()
 
     def _quick_specs(self, plugin):
         defs = [
             ("density", "密度", "粒や模様の数を増減します", ["density", "count", "strength", "intensity"]),
             ("size", "サイズ", "要素の大きさや太さです", ["width", "size_max", "size_min"]),
+            ("length", "長さ", "光の棒の長さです", ["length"]),
             ("speed", "速度", "動きの速さです", ["speed", "sweep"]),
+            ("direction", "向き", "動きの向きを回転します", ["motion_direction"]),
             ("blur", "ぼかし", "柔らかい印象にします", ["blur", "blur_far", "blur_mid", "blur_near"]),
             ("brightness", "明るさ", "全体の光り方を調整します", ["brightness", "glow_strength", "glow", "strength"]),
             ("random", "ランダム感", "揺らぎやノイズの量です", ["twinkle", "flicker", "noise", "scanlines", "grain"]),
@@ -731,7 +1118,7 @@ class EffectFactoryApp(tk.Tk):
             out.append({"id": cid, "label": label, "help": help_text, "keys": match})
             used.update(match)
         out.append({"id": "loop_length", "label": "ループ長", "help": "何秒で自然につながるかを決めます", "duration": True})
-        return out[:7]
+        return out[:9]
 
     def _build_quick_controls(self, plugin):
         specs = self._quick_specs(plugin)
@@ -853,12 +1240,14 @@ class EffectFactoryApp(tk.Tk):
             "glow_strength": "グロー強さ", "glow_radius": "グロー広がり", "mblur_samples": "モーションブラー",
             "layers": "奥行きレイヤ数", "blur_far": "遠景ぼけ", "blur_mid": "中景ぼけ", "blur_near": "近景ぼけ",
             "drift_x_cycles": "横移動", "drift_y_cycles": "縦移動", "size_min": "最小サイズ", "size_max": "最大サイズ",
-            "count": "数", "density": "密度", "palette": "色プリセット", "tint": "色味"
+            "count": "数", "density": "密度", "palette": "色プリセット", "tint": "色味", "length": "長さ", "motion_direction": "動きの向き"
         }.get(p["key"], p.get("label", p["key"]))
 
     def _on_ui_value_changed(self):
         if self._ui_restoring:
             return
+        self._refresh_timeline_ui()
+        self._sync_preview_runtime_from_ui()
         self._schedule_history("edit")
         if self.preview_auto_refresh.get():
             self._request_preview_rebuild()
@@ -878,6 +1267,11 @@ class EffectFactoryApp(tk.Tk):
             "random": {"base_seed": int(self.base_seed.get()), "randomize": bool(self.randomize.get()), "variant": int(self.variant.get())},
             "params": {k: v.get() for k, v in self.param_vars.items()},
             "param_overrides": sorted(self.param_overrides),
+            "timeline": {
+                "position": float(self.timeline_position.get()),
+                "selected_marker": self.timeline_selected_marker or "",
+                "markers": {label: self._clone_timeline_marker(marker) for label, marker in self.timeline_markers.items()},
+            },
         }
 
     def _schedule_history(self, reason):
@@ -938,6 +1332,12 @@ class EffectFactoryApp(tk.Tk):
             for key, value in snap["params"].items():
                 if key in self.param_vars:
                     self.param_vars[key].set(value)
+            timeline = snap.get("timeline", {})
+            self.timeline_markers = {label: self._clone_timeline_marker(marker) for label, marker in (timeline.get("markers") or {}).items()}
+            self.timeline_selected_marker = timeline.get("selected_marker") or None
+            if self.timeline_selected_marker not in self.timeline_markers:
+                self.timeline_selected_marker = None
+            self._set_timeline_position(float(timeline.get("position", 0.0)), redraw=False)
             self.selected_gallery_key = ("preset", self.preset_name.get()) if self.preset_name.get() in self.presets else ("effect", self.effect_id.get())
             self._refresh_gallery_selection()
             self._update_selection_labels()
@@ -947,6 +1347,8 @@ class EffectFactoryApp(tk.Tk):
         self._history_index = index
         self._history_sig = json.dumps(self._snapshot_state(), sort_keys=True, ensure_ascii=True, default=str)
         self._refresh_history_list()
+        self._refresh_timeline_ui()
+        self._sync_preview_runtime_from_ui()
         self._request_preview_rebuild(immediate=True)
 
     def _undo(self):
@@ -996,8 +1398,8 @@ class EffectFactoryApp(tk.Tk):
         ratio = {"弱め": 0.18, "ふつう": 0.33, "強め": 0.52}.get(self.random_strength.get(), 0.33)
         groups = {
             "color": {"color", "tint", "palette", "tint_r", "tint_g", "tint_b", "nebula_r", "nebula_g", "nebula_b"},
-            "shape": {"count", "density", "size_min", "size_max", "width", "layers", "shooting_stars"},
-            "motion": {"speed", "sweep", "flicker", "twinkle", "drift_x_cycles", "drift_y_cycles", "tear_prob"},
+            "shape": {"count", "density", "size_min", "size_max", "width", "length", "layers", "shooting_stars"},
+            "motion": {"speed", "sweep", "flicker", "twinkle", "drift_x_cycles", "drift_y_cycles", "tear_prob", "motion_direction"},
         }
         locked = set()
         if self.random_lock_color.get(): locked |= groups["color"]
@@ -1083,16 +1485,190 @@ class EffectFactoryApp(tk.Tk):
     def _collect_fixed_params(self):
         return {key: var.get() for key, var in self.param_vars.items()}
 
-    def _resolve_params_for_run(self, preset, rng: np.random.Generator):
-        plugin = self.plugins[self.effect_id.get()]
-        fixed = self._collect_fixed_params()
+    def _resolve_params_for_state(self, plugin, preset, fixed_params, param_overrides, rng: np.random.Generator):
         ranges = (preset or {}).get("params", {})
+        overrides = set(param_overrides)
         out = {}
         for p in plugin.params:
             key = p["key"]
-            spec = None if key in self.param_overrides else ranges.get(key)
-            out[key] = resolve_value(rng, spec, fixed.get(key, p.get("default")), pdesc=p)
+            spec = None if key in overrides else ranges.get(key)
+            out[key] = resolve_value(rng, spec, fixed_params.get(key, p.get("default")), pdesc=p)
         return out
+
+    def _resolve_params_for_run(self, preset, rng: np.random.Generator):
+        plugin = self.plugins[self.effect_id.get()]
+        return self._resolve_params_for_state(plugin, preset, self._collect_fixed_params(), self.param_overrides, rng)
+
+    def _build_param_state(self, preset, preset_name: str, eff_id: str, variant: int, fixed_params=None, param_overrides=None, label: str = None, time_sec: float = None):
+        plugin = self.plugins[eff_id]
+        fixed = dict(self._collect_fixed_params() if fixed_params is None else fixed_params)
+        overrides = set(self.param_overrides if param_overrides is None else param_overrides)
+        base_seed = int(self.base_seed.get())
+        out_w, out_h = int(self.w.get()), int(self.h.get())
+        out_fps = int(self.fps.get())
+        out_frames = max(2, int(round(out_fps * float(self.duration.get()))))
+        params_seed = _hash_seed(base_seed, int(variant), preset_name, eff_id, "params")
+        rng = np.random.default_rng(params_seed)
+        resolved_params = self._resolve_params_for_state(plugin, preset, fixed, overrides, rng)
+        param_blob = json.dumps(resolved_params, sort_keys=True, ensure_ascii=True)
+        final_seed = _hash_seed(base_seed, int(variant), preset_name, eff_id, out_w, out_h, out_fps, out_frames, param_blob)
+        runtime = dict(resolved_params)
+        runtime["__loop__"] = bool(self.loop_mode.get())
+        runtime["__frames__"] = int(out_frames)
+        runtime["__fps__"] = int(out_fps)
+        return {
+            "label": label,
+            "time_sec": (None if time_sec is None else float(time_sec)),
+            "base_seed": int(base_seed),
+            "variant": int(variant),
+            "final_seed": int(final_seed),
+            "fixed_params": fixed,
+            "param_overrides": sorted(overrides),
+            "resolved_params": resolved_params,
+            "runtime": runtime,
+        }
+
+    def _build_timeline_states(self, preset, preset_name: str, eff_id: str, variant: int):
+        out = []
+        for marker in self._active_timeline_markers():
+            out.append(self._build_param_state(
+                preset=preset,
+                preset_name=preset_name,
+                eff_id=eff_id,
+                variant=variant,
+                fixed_params=marker["params"],
+                param_overrides=marker.get("param_overrides", []),
+                label=marker["label"],
+                time_sec=marker["time_sec"],
+            ))
+        return out
+
+    def _animation_seed(self, current_state, timeline_states):
+        if not timeline_states:
+            return int(current_state["final_seed"])
+        marker_blob = json.dumps([
+            {
+                "label": state.get("label"),
+                "time_sec": float(state.get("time_sec", 0.0)),
+                "params": state["resolved_params"],
+            }
+            for state in timeline_states
+        ], sort_keys=True, ensure_ascii=True)
+        return _hash_seed(current_state["base_seed"], current_state["variant"], "timeline", marker_blob)
+
+    def _build_render_context(self, plugin, w: int, h: int, frames: int, current_state, timeline_states):
+        param_types = {p["key"]: p.get("type", "float") for p in plugin.params}
+        runtime = dict(current_state["runtime"])
+        if timeline_states:
+            runtime["__timeline__"] = {
+                "markers": [
+                    {
+                        "label": state.get("label"),
+                        "time_sec": float(state.get("time_sec", 0.0)),
+                        "params": dict(state["resolved_params"]),
+                    }
+                    for state in timeline_states
+                ],
+                "param_types": param_types,
+            }
+        cache = plugin.build_cache(
+            w=w,
+            h=h,
+            frames=frames,
+            seed=self._animation_seed(current_state, timeline_states),
+            params=runtime,
+        )
+        return {
+            "cache": cache,
+            "current_state": current_state,
+            "timeline_states": list(timeline_states),
+            "param_types": param_types,
+        }
+
+    def _interpolate_param_value(self, key: str, ptype: str, left_value, right_value, mix: float):
+        if mix <= 0.0:
+            return left_value
+        if mix >= 1.0:
+            return right_value
+        if ptype in ("choice", "bool"):
+            return left_value if mix < 0.5 else right_value
+        try:
+            out = float(left_value) + (float(right_value) - float(left_value)) * float(mix)
+            if key == "motion_direction":
+                lo = -180.0
+                hi = 180.0
+                return min(hi, max(lo, out))
+            return out
+        except Exception:
+            return left_value if mix < 0.5 else right_value
+
+    def _runtime_params_for_time(self, plugin, current_state, timeline_states, time_sec: float):
+        runtime = dict(current_state["runtime"])
+        if not timeline_states:
+            return runtime
+        states = list(timeline_states)
+        param_types = {p["key"]: p.get("type", "float") for p in plugin.params}
+        fps = max(1, int(current_state["runtime"].get("__fps__", 30)))
+        snap_window = 0.5 / float(fps)
+        nearest = min(states, key=lambda state: abs(float(state.get("time_sec", 0.0)) - float(time_sec)))
+        if abs(float(nearest.get("time_sec", 0.0)) - float(time_sec)) <= snap_window + 1e-9:
+            runtime.update(nearest["resolved_params"])
+        elif time_sec <= float(states[0].get("time_sec", 0.0)):
+            runtime.update(states[0]["resolved_params"])
+        elif time_sec >= float(states[-1].get("time_sec", 0.0)):
+            runtime.update(states[-1]["resolved_params"])
+        else:
+            left = states[0]
+            right = states[-1]
+            mix = 0.0
+            for candidate_left, candidate_right in zip(states, states[1:]):
+                right_time = float(candidate_right.get("time_sec", 0.0))
+                if time_sec <= right_time + 1e-9:
+                    left = candidate_left
+                    right = candidate_right
+                    left_time = float(candidate_left.get("time_sec", 0.0))
+                    span = max(1e-6, right_time - left_time)
+                    mix = 0.0 if time_sec <= left_time else min(1.0, max(0.0, (time_sec - left_time) / span))
+                    break
+            base_params = current_state["resolved_params"]
+            for p in plugin.params:
+                key = p["key"]
+                default = base_params.get(key, p.get("default"))
+                left_value = left["resolved_params"].get(key, default)
+                right_value = right["resolved_params"].get(key, left_value)
+                runtime[key] = self._interpolate_param_value(key, param_types.get(key, "float"), left_value, right_value, mix)
+
+        runtime["__loop__"] = bool(current_state["runtime"].get("__loop__", False))
+        runtime["__frames__"] = int(current_state["runtime"].get("__frames__", 1))
+        runtime["__fps__"] = int(current_state["runtime"].get("__fps__", 30))
+        return runtime
+
+    def _render_frame_at_time(self, plugin, render_context, frame_i: int, time_sec: float):
+        if not render_context:
+            raise ValueError("render context is empty")
+        cache = render_context["cache"]
+        cache["__runtime_params__"] = self._runtime_params_for_time(
+            plugin,
+            render_context["current_state"],
+            render_context.get("timeline_states", []),
+            time_sec,
+        )
+        return plugin.render_frame(cache, max(0, int(frame_i)))
+
+    def _timeline_meta(self, current_state, timeline_states):
+        return {
+            "mode": ("marker_animation" if timeline_states else "single_state"),
+            "markers": [
+                {
+                    "label": state.get("label"),
+                    "time_sec": float(state.get("time_sec", 0.0)),
+                    "params": state["resolved_params"],
+                    "param_overrides": list(state.get("param_overrides", [])),
+                }
+                for state in timeline_states
+            ],
+            "current_params": current_state["resolved_params"],
+        }
 
     def _make_outputs(self, preset_name: str, effect_id: str, w: int, h: int, fps: int, outdir: str, suffix: str = ""):
         prefix = self.file_prefix.get().strip() or "overlay"
@@ -1116,9 +1692,19 @@ class EffectFactoryApp(tk.Tk):
 
     def _set_busy(self, busy: bool):
         self.busy = busy
+        if busy:
+            self._set_timeline_playing(False)
         self.btn_make.config(state=("disabled" if busy else "normal"))
         self.btn_preview.config(state=("disabled" if busy else "normal"))
         self.btn_gumroad_zip.config(state=("disabled" if busy else "normal"))
+        if hasattr(self, "btn_timeline_play"):
+            self.btn_timeline_play.config(state=("disabled" if busy else "normal"))
+        if hasattr(self, "btn_timeline_home"):
+            self.btn_timeline_home.config(state=("disabled" if busy else "normal"))
+        if hasattr(self, "btn_timeline_clear"):
+            self.btn_timeline_clear.config(state=("disabled" if busy else "normal"))
+        for btn in getattr(self, "timeline_marker_buttons", []):
+            btn.config(state=("disabled" if busy else "normal"))
         self._update_random_ui_state()
         if not busy:
             self.pbar["value"] = 0
@@ -1190,20 +1776,8 @@ class EffectFactoryApp(tk.Tk):
             messagebox.showerror("エラー", str(e))
 
     def _calc_seed_and_params(self, variant: int, preset_name: str, eff_id: str, preset):
-        base_seed = int(self.base_seed.get())
-        out_w, out_h = int(self.w.get()), int(self.h.get())
-        out_fps = int(self.fps.get())
-        out_frames = max(2, int(round(out_fps * float(self.duration.get()))))
-        params_seed = _hash_seed(base_seed, int(variant), preset_name, eff_id, "params")
-        rng = np.random.default_rng(params_seed)
-        resolved_params = self._resolve_params_for_run(preset, rng)
-        param_blob = json.dumps(resolved_params, sort_keys=True, ensure_ascii=True)
-        final_seed = _hash_seed(base_seed, int(variant), preset_name, eff_id, out_w, out_h, out_fps, out_frames, param_blob)
-        runtime = dict(resolved_params)
-        runtime["__loop__"] = bool(self.loop_mode.get())
-        runtime["__frames__"] = int(out_frames)
-        runtime["__fps__"] = int(out_fps)
-        return base_seed, int(variant), int(final_seed), resolved_params, runtime
+        state = self._build_param_state(preset=preset, preset_name=preset_name, eff_id=eff_id, variant=variant)
+        return state["base_seed"], state["variant"], state["final_seed"], state["resolved_params"], state["runtime"]
 
     def _setup_live_preview_traces(self):
         if getattr(self, "_live_traces_set", False):
@@ -1261,12 +1835,28 @@ class EffectFactoryApp(tk.Tk):
         scale = float(self.live_preview_scale.get())
         w0, h0 = int(self.w.get()), int(self.h.get())
         w = max(160, int(round(w0 * scale / 16) * 16)); h = max(160, int(round(h0 * scale / 16) * 16))
-        fps = int(self.live_preview_fps.get()); seconds = float(self.live_preview_seconds.get())
-        frames = max(2, int(round(fps * seconds)))
+        render_fps = int(self.live_preview_fps.get())
+        duration = max(0.1, float(self.duration.get()))
+        output_fps = int(self.fps.get())
+        output_frames = max(2, int(round(output_fps * duration)))
         variant = 1 if not self.randomize.get() else int(self.variant.get())
-        base_seed, variant, final_seed, resolved_params, runtime = self._calc_seed_and_params(variant=variant, preset_name=preset_name, eff_id=eff_id, preset=preset)
-        self.final_seed.set(int(final_seed)); self._update_random_ui_state()
-        return {"enabled": bool(self.live_preview.get()), "preset_name": preset_name, "eff_id": eff_id, "plugin": plugin, "w": w, "h": h, "fps": fps, "frames": frames, "base_seed": base_seed, "variant": variant, "final_seed": final_seed, "resolved_params": resolved_params, "params": runtime}
+        current_state = self._build_param_state(preset=preset, preset_name=preset_name, eff_id=eff_id, variant=variant)
+        timeline_states = self._build_timeline_states(preset=preset, preset_name=preset_name, eff_id=eff_id, variant=variant)
+        self.final_seed.set(int(current_state["final_seed"])); self._update_random_ui_state()
+        return {
+            "enabled": bool(self.live_preview.get()),
+            "preset_name": preset_name,
+            "eff_id": eff_id,
+            "plugin": plugin,
+            "w": w,
+            "h": h,
+            "render_fps": render_fps,
+            "duration_sec": duration,
+            "output_fps": output_fps,
+            "output_frames": output_frames,
+            "current_state": current_state,
+            "timeline_states": timeline_states,
+        }
 
     def _next_preview_variant(self):
         try:
@@ -1284,13 +1874,21 @@ class EffectFactoryApp(tk.Tk):
             self.msgq.put(("err", str(e)))
 
     def _preview_worker(self):
-        cache = None; plugin = None; fps = 15; frames = 60; frame_i = 0; last = time.perf_counter()
+        plugin = None
+        render_context = None
+        render_fps = 15
+        output_fps = 30
+        output_frames = 2
+        duration_sec = 1.0
+        last_frame_key = None
+        loading_pending = False
+        last = time.perf_counter()
         while not self._preview_stop_evt.is_set():
             try:
                 if self.busy:
                     time.sleep(0.03)
                     continue
-                if self._preview_rebuild_evt.is_set() or cache is None or plugin is None:
+                if self._preview_rebuild_evt.is_set() or render_context is None or plugin is None:
                     self._preview_rebuild_evt.clear()
                     with self._preview_settings_lock:
                         snap = dict(self._preview_settings) if self._preview_settings else None
@@ -1298,13 +1896,38 @@ class EffectFactoryApp(tk.Tk):
                         time.sleep(0.03)
                         continue
                     if not bool(snap.get("enabled", True)):
-                        time.sleep(0.03); cache = None; plugin = None
+                        time.sleep(0.03)
+                        render_context = None
+                        plugin = None
+                        last_frame_key = None
                         continue
-                    plugin = snap["plugin"]; fps = int(snap["fps"]); frames = int(snap["frames"]); frame_i = 0
-                    cache = plugin.build_cache(w=int(snap["w"]), h=int(snap["h"]), frames=frames, seed=int(snap["final_seed"]), params=snap["params"])
+                    plugin = snap["plugin"]
+                    render_fps = int(snap["render_fps"])
+                    output_fps = int(snap["output_fps"])
+                    output_frames = int(snap["output_frames"])
+                    duration_sec = float(snap["duration_sec"])
+                    render_context = self._build_render_context(
+                        plugin,
+                        int(snap["w"]),
+                        int(snap["h"]),
+                        output_frames,
+                        snap["current_state"],
+                        snap.get("timeline_states", []),
+                    )
+                    last_frame_key = None
+                    loading_pending = True
                     self.msgq.put(("preview_state", {"loading": True, "text": "低解像度で更新中..."}))
-                img = plugin.render_frame(cache, frame_i % frames)
-                frame_i += 1
+                with self._preview_runtime_lock:
+                    runtime = dict(self._preview_runtime)
+                playhead_sec = min(duration_sec, max(0.0, float(runtime.get("playhead_sec", 0.0))))
+                frame_i = min(output_frames - 1, max(0, int(round(playhead_sec * output_fps))))
+                frame_key = (frame_i, round(playhead_sec, 4))
+                if not bool(runtime.get("playing")) and frame_key == last_frame_key:
+                    time.sleep(0.03)
+                    last = time.perf_counter()
+                    continue
+                img = self._render_frame_at_time(plugin, render_context, frame_i, playhead_sec)
+                last_frame_key = frame_key
                 try:
                     while True:
                         self._preview_frame_q.get_nowait()
@@ -1314,14 +1937,21 @@ class EffectFactoryApp(tk.Tk):
                     self._preview_frame_q.put_nowait(img)
                 except Exception:
                     pass
-                if frame_i <= 2:
+                if loading_pending:
+                    loading_pending = False
                     self.msgq.put(("preview_state", {"loading": False, "text": "プレビュー更新完了"}))
-                now = time.perf_counter(); target = 1.0 / max(1, fps)
-                if now - last < target:
-                    time.sleep(target - (now - last))
-                last = time.perf_counter()
+                if bool(runtime.get("playing")):
+                    now = time.perf_counter()
+                    target = 1.0 / max(1, render_fps)
+                    if now - last < target:
+                        time.sleep(target - (now - last))
+                    last = time.perf_counter()
+                else:
+                    time.sleep(0.02)
+                    last = time.perf_counter()
             except Exception as e:
-                cache = None; plugin = None
+                render_context = None
+                plugin = None
                 self.msgq.put(("log", f"[LIVEPREVIEW] render error: {e}"))
                 self.msgq.put(("preview_state", {"loading": False, "text": "プレビュー更新失敗"}))
                 time.sleep(0.2)
@@ -1342,6 +1972,7 @@ class EffectFactoryApp(tk.Tk):
                 self.after(33, self._preview_ui_tick)
 
     def _on_close(self):
+        self._set_timeline_playing(False)
         self._preview_stop_evt.set()
         try:
             self.destroy()
@@ -1357,21 +1988,26 @@ class EffectFactoryApp(tk.Tk):
             scale = float(self.preview_scale.get())
             w0, h0 = int(self.w.get()), int(self.h.get())
             w = max(160, int(round(w0 * scale / 16) * 16)); h = max(160, int(round(h0 * scale / 16) * 16))
-            fps = int(self.fps.get()); duration = min(float(self.preview_seconds.get()), float(self.duration.get()))
+            fps = int(self.fps.get()); duration = float(self.duration.get())
             frames = max(2, int(round(fps * duration)))
             variant = 1 if not self.randomize.get() else int(self.variant.get())
-            base_seed, variant, final_seed, resolved_params, runtime = self._calc_seed_and_params(variant=variant, preset_name=preset_name, eff_id=eff_id, preset=preset)
+            current_state = self._build_param_state(preset=preset, preset_name=preset_name, eff_id=eff_id, variant=variant)
+            timeline_states = self._build_timeline_states(preset=preset, preset_name=preset_name, eff_id=eff_id, variant=variant)
             preview_dir = os.path.join(outdir, "_preview"); _ensure_dir(preview_dir)
             mp4, thumb, meta = self._make_outputs(preset_name, eff_id, w, h, fps, preview_dir, suffix="_preview")
             self.msgq.put(("log", f"[PREVIEW] 生成開始: preset={preset_name} effect={eff_id}"))
-            self.msgq.put(("log", f"[PREVIEW] seed: base={base_seed} variant={variant} final={final_seed}"))
-            self.msgq.put(("log", f"[PREVIEW] params: {resolved_params}"))
-            cache = plugin.build_cache(w=w, h=h, frames=frames, seed=final_seed, params=runtime)
+            self.msgq.put(("log", f"[PREVIEW] seed: base={current_state['base_seed']} variant={current_state['variant']} final={current_state['final_seed']}"))
+            self.msgq.put(("log", f"[PREVIEW] params: {current_state['resolved_params']}"))
+            if timeline_states:
+                summary = ", ".join(f"{state['label']}={self._format_seconds(state['time_sec'])}" for state in timeline_states)
+                self.msgq.put(("log", f"[PREVIEW] timeline: {summary}"))
+            render_context = self._build_render_context(plugin, w, h, frames, current_state, timeline_states)
             p, cmd = _ffmpeg_pipe_raw_rgb(self.ffmpeg_path.get().strip(), w, h, fps, mp4, self.encoder.get(), self.nv_preset.get(), "6M")
-            self.msgq.put(("log", "[PREVIEW] FFmpeg: " + " ".join([f'\"{c}\"' if " " in c else c for c in cmd])))
+            self.msgq.put(("log", "[PREVIEW] FFmpeg: " + " ".join([f'"{c}"' if " " in c else c for c in cmd])))
             first_img = None
             for i in range(frames):
-                img = plugin.render_frame(cache, i)
+                time_sec = min(duration, i / float(max(1, fps)))
+                img = self._render_frame_at_time(plugin, render_context, i, time_sec)
                 if first_img is None:
                     first_img = img.copy()
                 p.stdin.write(img.tobytes())
@@ -1385,10 +2021,10 @@ class EffectFactoryApp(tk.Tk):
             _write_json(meta, {
                 "preset_name": preset_name, "effect_id": eff_id, "effect_name": plugin.name, "preview": True,
                 "output": {"w": w, "h": h, "fps": fps, "duration": duration, "frames": frames, "encoder": self.encoder.get(), "nv_preset": self.nv_preset.get(), "bitrate": "6M"},
-                "random": {"base_seed": base_seed, "variant": variant, "final_seed": final_seed},
-                "params": resolved_params, "outputs": {"mp4": mp4, "thumb": thumb}, "created": _now_ts(), "note": "Preview MP4"
+                "random": {"base_seed": current_state["base_seed"], "variant": current_state["variant"], "final_seed": current_state["final_seed"]},
+                "params": current_state["resolved_params"], "timeline": self._timeline_meta(current_state, timeline_states), "outputs": {"mp4": mp4, "thumb": thumb}, "created": _now_ts(), "note": "Preview MP4"
             })
-            self.msgq.put(("sync_random_ui", {"variant": variant, "final_seed": final_seed}))
+            self.msgq.put(("sync_random_ui", {"variant": current_state["variant"], "final_seed": current_state["final_seed"]}))
             self.msgq.put(("log", f"[PREVIEW] 完了: {mp4}"))
             self.msgq.put(("done", f"プレビュー生成完了\n{mp4}"))
         except Exception as e:
@@ -1405,16 +2041,21 @@ class EffectFactoryApp(tk.Tk):
             if frames < 2:
                 raise ValueError("秒数が短すぎます。")
             variant = 1 if not self.randomize.get() else int(self.variant.get())
-            base_seed, variant, final_seed, resolved_params, runtime = self._calc_seed_and_params(variant=variant, preset_name=preset_name, eff_id=eff_id, preset=preset)
+            current_state = self._build_param_state(preset=preset, preset_name=preset_name, eff_id=eff_id, variant=variant)
+            timeline_states = self._build_timeline_states(preset=preset, preset_name=preset_name, eff_id=eff_id, variant=variant)
             mp4, _, meta = self._make_outputs(preset_name, eff_id, w, h, fps, outdir)
             self.msgq.put(("log", f"生成開始: preset={preset_name} effect={eff_id}"))
-            self.msgq.put(("log", f"seed: base={base_seed} variant={variant} final={final_seed} randomize={self.randomize.get()}"))
-            self.msgq.put(("log", f"params: {resolved_params}"))
-            cache = plugin.build_cache(w=w, h=h, frames=frames, seed=final_seed, params=runtime)
+            self.msgq.put(("log", f"seed: base={current_state['base_seed']} variant={current_state['variant']} final={current_state['final_seed']} randomize={self.randomize.get()}"))
+            self.msgq.put(("log", f"params: {current_state['resolved_params']}"))
+            if timeline_states:
+                summary = ", ".join(f"{state['label']}={self._format_seconds(state['time_sec'])}" for state in timeline_states)
+                self.msgq.put(("log", f"timeline: {summary}"))
+            render_context = self._build_render_context(plugin, w, h, frames, current_state, timeline_states)
             p, cmd = _ffmpeg_pipe_raw_rgb(self.ffmpeg_path.get().strip(), w, h, fps, mp4, self.encoder.get(), self.nv_preset.get(), self.bitrate.get().strip() or "12M")
-            self.msgq.put(("log", "FFmpeg: " + " ".join([f'\"{c}\"' if " " in c else c for c in cmd])))
+            self.msgq.put(("log", "FFmpeg: " + " ".join([f'"{c}"' if " " in c else c for c in cmd])))
             for i in range(frames):
-                img = plugin.render_frame(cache, i)
+                time_sec = min(duration, i / float(max(1, fps)))
+                img = self._render_frame_at_time(plugin, render_context, i, time_sec)
                 p.stdin.write(img.tobytes())
                 if i % max(1, frames // 100) == 0:
                     self.msgq.put(("progress", int(i * 100 / frames)))
@@ -1424,13 +2065,13 @@ class EffectFactoryApp(tk.Tk):
             _write_json(meta, {
                 "preset_name": preset_name, "effect_id": eff_id, "effect_name": plugin.name,
                 "output": {"w": w, "h": h, "fps": fps, "duration": duration, "frames": frames, "encoder": self.encoder.get(), "nv_preset": self.nv_preset.get(), "bitrate": self.bitrate.get().strip()},
-                "random": {"base_seed": base_seed, "variant": variant, "final_seed": final_seed},
-                "params": resolved_params, "outputs": {"mp4": mp4}, "created": _now_ts(), "note": "Black background overlay. Use Screen/Add blend in PV editor."
+                "random": {"base_seed": current_state["base_seed"], "variant": current_state["variant"], "final_seed": current_state["final_seed"]},
+                "params": current_state["resolved_params"], "timeline": self._timeline_meta(current_state, timeline_states), "outputs": {"mp4": mp4}, "created": _now_ts(), "note": "Black background overlay. Use Screen/Add blend in PV editor."
             })
             self.last_export_mp4 = mp4
-            self.msgq.put(("sync_random_ui", {"variant": variant, "final_seed": final_seed}))
+            self.msgq.put(("sync_random_ui", {"variant": current_state["variant"], "final_seed": current_state["final_seed"]}))
             if self.randomize.get():
-                self.msgq.put(("advance_variant", int(variant) + 1))
+                self.msgq.put(("advance_variant", int(current_state["variant"]) + 1))
             self.msgq.put(("log", f"完了: {mp4}"))
             self.msgq.put(("log", f"   meta: {meta}"))
             self.msgq.put(("done", f"本生成完了\n{mp4}"))
@@ -1478,3 +2119,7 @@ class EffectFactoryApp(tk.Tk):
 if __name__ == "__main__":
     app = EffectFactoryApp()
     app.mainloop()
+
+
+
+
