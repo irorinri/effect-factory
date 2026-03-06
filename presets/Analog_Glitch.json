@@ -12,8 +12,7 @@
     "bitrate": "12M"
   },
   "random": {
-    "base_seed": 99901,
-    "variant_mode": "counter"
+    "base_seed": 99901
   },
   "params": {
     "intensity": [

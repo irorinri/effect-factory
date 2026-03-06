@@ -1,4 +1,4 @@
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
 import numpy as np
 import os, sys
 
@@ -48,6 +48,8 @@ def build_cache(w, h, frames, seed, params):
         "w": w,
         "h": h,
         "frames": frames,
+        "__fps__": int(params.get("__fps__", 30)),
+        "__frames__": int(params.get("__frames__", frames)),
         "seed": int(seed),
         "__loop__": loop,
         "twinkle": twinkle,
@@ -56,14 +58,29 @@ def build_cache(w, h, frames, seed, params):
         "blur": float(params.get("blur", 0.6)),
         "glow": float(params.get("glow", 0.45)),
         "grain": float(params.get("grain", 0.015)),
+        "brightness": float(params.get("brightness", 1.0)),
+        "speed": float(params.get("speed", 1.0)),
     }
 
 
 def render_frame(cache, i):
     w, h, frames = cache["w"], cache["h"], cache["frames"]
     loop = bool(cache.get("__loop__", False))
-    denom = (frames - 1) if (loop and frames > 1) else frames
-    t = (i / float(denom)) if denom > 0 else 0.0
+    fps = max(1, int(cache.get("__fps__", 30)))
+    n = max(1, int(cache.get("__frames__", frames)))
+    t_sec = i / float(fps)
+    u = (i / float(max(1, n - 1))) if n > 1 else 0.0
+    duration_sec = max(1.0 / fps, (n - 1) / float(fps))
+    speed = max(0.0, float(cache.get("speed", 1.0)))
+
+    def phase_from_rate(rate_hz):
+        scaled_rate = rate_hz * speed
+        if loop:
+            if abs(scaled_rate) < 1e-9:
+                return 0.0
+            cycles = max(1, int(round(abs(scaled_rate) * duration_sec)))
+            return np.copysign(u * cycles, scaled_rate)
+        return scaled_rate * t_sec
 
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     dr = ImageDraw.Draw(img)
@@ -72,10 +89,10 @@ def render_frame(cache, i):
     twinkle = float(cache["twinkle"])
 
     for (x0, y0, kx, ky, freq, phase, size, alpha) in cache["particles"]:
-        x = (x0 + (kx * w) * t) % w
-        y = (y0 + (ky * h) * t) % h
+        x = (x0 + w * phase_from_rate(kx)) % w
+        y = (y0 + h * phase_from_rate(ky)) % h
 
-        pulse = 0.5 + 0.5 * np.sin(2 * np.pi * (freq * t) + phase)
+        pulse = 0.5 + 0.5 * np.sin(2 * np.pi * phase_from_rate(freq) + phase)
         intensity = alpha * ((1.0 - twinkle) + twinkle * pulse)
 
         r = size * (0.75 + 0.45 * pulse)
@@ -102,6 +119,9 @@ def render_frame(cache, i):
     if grain > 0:
         out = film_grain(out, amount=grain, seed=cache["seed"] + i * 23)
 
+    if cache["brightness"] != 1.0:
+        out = ImageEnhance.Brightness(out).enhance(float(cache["brightness"]))
+
     return out
 
 
@@ -116,6 +136,8 @@ EFFECT = {
         {"key": "blur", "label": "blur", "type": "float", "default": 0.6, "min": 0.0, "max": 4.0, "step": 0.1},
         {"key": "glow", "label": "glow", "type": "float", "default": 0.45, "min": 0.0, "max": 2.0, "step": 0.05},
         {"key": "grain", "label": "grain", "type": "float", "default": 0.015, "min": 0.0, "max": 0.2, "step": 0.005},
+        {"key": "brightness", "label": "brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 2.0, "step": 0.05},
+        {"key": "speed", "label": "speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05},
         {"key": "drift_x_cycles", "label": "drift x cycles", "type": "int", "default": 1, "min": 0, "max": 6, "step": 1},
         {"key": "drift_y_cycles", "label": "drift y cycles", "type": "int", "default": 1, "min": 0, "max": 6, "step": 1},
         {"key": "palette", "label": "palette", "type": "choice", "default": "white", "choices": ["white", "cool", "warm"]},

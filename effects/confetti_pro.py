@@ -1,4 +1,4 @@
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
 import numpy as np
 import os, sys
 sys.path.append(os.path.dirname(__file__))
@@ -66,6 +66,8 @@ def build_cache(w, h, frames, seed, params):
         "w": w, "h": h, "frames": frames,
         "seed": int(seed),
         "__loop__": loop,
+        "__fps__": int(params.get("__fps__", 30)),
+        "__frames__": int(params.get("__frames__", frames)),
         "pieces": pieces,
         "layers": layers,
         "blur_far": float(params.get("blur_far", 1.6)),
@@ -74,6 +76,8 @@ def build_cache(w, h, frames, seed, params):
         "mblur_samples": int(params.get("mblur_samples", 3)),
         "glow": float(params.get("glow", 0.0)),
         "grain": float(params.get("grain", 0.02)),
+        "brightness": float(params.get("brightness", 1.0)),
+        "speed": float(params.get("speed", 1.0)),
     }
     return cache
 
@@ -103,8 +107,21 @@ def _draw_piece(draw: ImageDraw.ImageDraw, cx, cy, size, aspect, ang_deg, shade,
 def render_frame(cache, i):
     w, h, frames = cache["w"], cache["h"], cache["frames"]
     loop = bool(cache.get("__loop__", False))
-    denom = (frames - 1) if (loop and frames > 1) else frames
-    t = (i / float(denom)) if denom > 0 else 0.0
+    fps = max(1, int(cache.get("__fps__", 30)))
+    n = max(1, int(cache.get("__frames__", frames)))
+    t_sec = i / float(fps)
+    u = (i / float(max(1, n - 1))) if n > 1 else 0.0
+    duration_sec = max(1.0 / fps, (n - 1) / float(fps))
+    speed = max(0.0, float(cache.get("speed", 1.0)))
+
+    def phase_from_rate(rate_hz, u_value, t_value):
+        scaled_rate = rate_hz * speed
+        if loop:
+            if abs(scaled_rate) < 1e-9:
+                return 0.0
+            cycles = max(1, int(round(abs(scaled_rate) * duration_sec)))
+            return np.copysign(u_value * cycles, scaled_rate)
+        return scaled_rate * t_value
 
     samples = max(1, int(cache["mblur_samples"]))
     # Separate layer images for depth blur control
@@ -115,19 +132,18 @@ def render_frame(cache, i):
         li = p["li"]
         # motion blur by sub-sampling in time
         for s in range(samples):
-            ts = (t + (s / samples) * (1.0 / max(1, frames)))  # tiny lead
+            ts_u = u + (s / samples) * (1.0 / max(1, n - 1))
+            ts_sec = t_sec + (s / samples) * (1.0 / fps)
             if loop:
-                ts = ts % 1.0
-            # position (wrap)
-            x = (p["x0"] + (p["kx"] * w) * ts) % w
-            y = (p["y0"] + (p["ky"] * h) * ts) % h
+                ts_u = ts_u % 1.0
+            x = (p["x0"] + w * phase_from_rate(p["kx"], ts_u, ts_sec)) % w
+            y = (p["y0"] + h * phase_from_rate(p["ky"], ts_u, ts_sec)) % h
 
-            # flutter (small lateral sway)
-            sway = np.sin(2*np.pi*(p["ff"]*ts) + p["fp"])
+            sway_phase = phase_from_rate(p["ff"], ts_u, ts_sec)
+            sway = np.sin(2*np.pi*sway_phase + p["fp"])
             x = (x + sway * (8.0 + 14.0 * (li / max(1, cache["layers"]-1)))) % w
 
-            # rotation (integer cycles)
-            ang = p["angle0"] + 360.0 * p["rot"] * ts
+            ang = p["angle0"] + 360.0 * phase_from_rate(p["rot"], ts_u, ts_sec)
             # alpha taper for blur samples
             a = p["alpha"] * (0.75 if s > 0 else 1.0) * (1.0 - 0.12*s)
             _draw_piece(layer_draws[li], x, y, p["size"], p["aspect"], ang, p["shade"], a, p["shape"])
@@ -157,6 +173,9 @@ def render_frame(cache, i):
     if cache["grain"] and cache["grain"] > 0:
         out = film_grain(out, amount=float(cache["grain"]), seed=cache["seed"] + i * 13)
 
+    if cache["brightness"] != 1.0:
+        out = ImageEnhance.Brightness(out).enhance(float(cache["brightness"]))
+
     return out
 
 EFFECT = {
@@ -171,6 +190,8 @@ EFFECT = {
         {"key": "blur_near", "label": "近景ぼけ", "type": "float", "default": 0.0, "min": 0.0, "max": 4.0, "step": 0.2},
         {"key": "glow", "label": "グロー", "type": "float", "default": 0.0, "min": 0.0, "max": 1.5, "step": 0.1},
         {"key": "grain", "label": "グレイン", "type": "float", "default": 0.02, "min": 0.0, "max": 0.2, "step": 0.01},
+        {"key": "brightness", "label": "brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 2.0, "step": 0.05},
+        {"key": "speed", "label": "speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05},
     ],
     "build_cache": build_cache,
     "render_frame": render_frame,

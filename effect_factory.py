@@ -1,38 +1,27 @@
-import os, json, time, queue, threading, subprocess, hashlib, importlib.util, zipfile
+﻿import os, json, time, queue, threading, subprocess, hashlib, importlib.util, zipfile
 from dataclasses import dataclass
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import numpy as np
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageOps, ImageDraw
 
-# ============================================================
-# Effect Factory v2
-# - plugin: effects/*.py (1 effect per file)
-# - preset: presets/*.json
-# - output: black background MP4 (overlay for Screen/Add in editor)
-# - seed: base_seed + variant_seed -> final_seed (reproducible)
-# - NEW v2:
-#   * Loop guarantee toggle (head==tail by sampling t in [0..1] with last frame t=1)
-#   * Preview render (low-res + short) that matches the next "final" render
-# ============================================================
-
-# -------------------------
-# Utilities
-# -------------------------
 
 def _now_ts():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
+
 def _ensure_dir(p: str):
     os.makedirs(p, exist_ok=True)
 
+
 def _open_folder(path: str):
     try:
-        os.startfile(path)  # Windows
+        os.startfile(path)
     except Exception:
         pass
+
 
 def _hash_seed(*items) -> int:
     h = hashlib.sha256()
@@ -41,6 +30,7 @@ def _hash_seed(*items) -> int:
         h.update(b"|")
     return int.from_bytes(h.digest()[:8], "big") & 0x7FFFFFFF
 
+
 def _read_json(path: str, default=None):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -48,28 +38,22 @@ def _read_json(path: str, default=None):
     except Exception:
         return default
 
+
 def _write_json(path: str, obj):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
+
 def _ffmpeg_no_window_flags():
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+
 def _ffmpeg_pipe_raw_rgb(ffmpeg_path, w, h, fps, out_mp4, encoder, nv_preset, bitrate):
     cmd = [
-        ffmpeg_path, "-y",
-        "-f", "rawvideo",
-        "-pix_fmt", "rgb24",
-        "-s", f"{w}x{h}",
-        "-r", str(fps),
-        "-i", "-",
-        "-an",
-        "-c:v", encoder,
-        "-preset", nv_preset,
-        "-b:v", bitrate,
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        out_mp4
+        ffmpeg_path, "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
+        "-s", f"{w}x{h}", "-r", str(fps), "-i", "-",
+        "-an", "-c:v", encoder, "-preset", nv_preset, "-b:v", bitrate,
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart", out_mp4
     ]
     p = subprocess.Popen(
         cmd,
@@ -80,9 +64,6 @@ def _ffmpeg_pipe_raw_rgb(ffmpeg_path, w, h, fps, out_mp4, encoder, nv_preset, bi
     )
     return p, cmd
 
-# -------------------------
-# Plugin loading
-# -------------------------
 
 @dataclass
 class EffectPlugin:
@@ -92,40 +73,33 @@ class EffectPlugin:
     build_cache: callable
     render_frame: callable
 
+
 def load_effects(effects_dir: str):
     plugins = {}
     if not os.path.isdir(effects_dir):
         return plugins
-
     for fn in os.listdir(effects_dir):
         if not fn.endswith(".py") or fn.startswith("_") or fn == "__init__.py":
             continue
         path = os.path.join(effects_dir, fn)
         mod_name = "effects_" + os.path.splitext(fn)[0]
-
         spec = importlib.util.spec_from_file_location(mod_name, path)
         if spec is None or spec.loader is None:
             continue
         mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)  # type: ignore
-
+        spec.loader.exec_module(mod)
         eff = getattr(mod, "EFFECT", None)
         if not eff:
             continue
-
-        plugin = EffectPlugin(
+        plugins[eff["id"]] = EffectPlugin(
             id=eff["id"],
             name=eff["name"],
             params=eff.get("params", []),
             build_cache=eff["build_cache"],
             render_frame=eff["render_frame"],
         )
-        plugins[plugin.id] = plugin
     return plugins
 
-# -------------------------
-# Presets
-# -------------------------
 
 def load_presets(presets_dir: str):
     presets = {}
@@ -142,79 +116,53 @@ def load_presets(presets_dir: str):
         presets[obj["name"]] = obj
     return presets
 
-# -------------------------
-# Randomization rules
-# -------------------------
 
-def resolve_value(rng: np.random.Generator, spec, base_value, pdesc=None, jitter=0.0):
-    """
-    spec can be:
-      - None: use base_value (and optional jitter if jitter>0)
-      - number/bool/str: fixed
-      - [min,max]: uniform (int/float inferred by pdesc["type"])
-      - {"choices":[...]}: random choice
-    """
+def resolve_value(rng: np.random.Generator, spec, base_value, pdesc=None):
     if spec is None:
-        # optional jitter around base_value
-        if jitter > 0 and isinstance(base_value, (int, float)):
-            lo = base_value * (1.0 - jitter)
-            hi = base_value * (1.0 + jitter)
-            if pdesc and pdesc.get("type") == "int":
-                lo_i, hi_i = int(round(lo)), int(round(hi))
-                if pdesc.get("min") is not None:
-                    lo_i = max(lo_i, int(pdesc["min"]))
-                if pdesc.get("max") is not None:
-                    hi_i = min(hi_i, int(pdesc["max"]))
-                return int(rng.integers(lo_i, hi_i + 1))
-            else:
-                if pdesc and pdesc.get("min") is not None:
-                    lo = max(lo, float(pdesc["min"]))
-                if pdesc and pdesc.get("max") is not None:
-                    hi = min(hi, float(pdesc["max"]))
-                return float(rng.uniform(lo, hi))
         return base_value
-
     if isinstance(spec, dict) and "choices" in spec:
         choice = rng.choice(spec["choices"])
         return choice.item() if hasattr(choice, "item") else choice
-
     if isinstance(spec, list) and len(spec) == 2:
         lo, hi = spec[0], spec[1]
         if pdesc and pdesc.get("type") == "int":
-            lo_i, hi_i = int(lo), int(hi)
-            return int(rng.integers(lo_i, hi_i + 1))
+            return int(rng.integers(int(lo), int(hi) + 1))
         return float(rng.uniform(float(lo), float(hi)))
-
     return spec
 
-# -------------------------
-# App
-# -------------------------
+
+def _effect_category(effect_id: str, name: str) -> str:
+    s = f"{effect_id} {name}".lower()
+    if any(k in s for k in ["sparkle", "star", "confetti"]):
+        return "Particles"
+    if any(k in s for k in ["bokeh", "fog", "glow"]):
+        return "Glow"
+    if any(k in s for k in ["line", "ray"]):
+        return "Lines"
+    if any(k in s for k in ["glitch", "noise"]):
+        return "Noise"
+    return "Abstract"
 
 
-# -------------------------
-# UI helpers (accordion / scroll)
-# -------------------------
+def _effect_usage(effect_id: str, name: str) -> str:
+    s = f"{effect_id} {name}".lower()
+    return "背景向け" if any(k in s for k in ["fog", "starfield"]) else "Overlay向け"
+
 
 class CollapsibleSection(ttk.Frame):
-    """A simple accordion-like section: click header to expand/collapse."""
     def __init__(self, master, title: str, expanded: bool = False):
         super().__init__(master)
         self._title = title
         self._expanded = tk.BooleanVar(value=expanded)
-
         self._header = ttk.Button(self, command=self.toggle)
         self._header.pack(fill="x")
-
         self.body = ttk.Frame(self)
         if expanded:
-            self.body.pack(fill="x", padx=10, pady=8)
-
+            self.body.pack(fill="x", padx=8, pady=8)
         self._refresh()
 
     def _refresh(self):
-        arrow = "▼" if self._expanded.get() else "▶"
-        self._header.configure(text=f"{arrow} {self._title}")
+        self._header.configure(text=("▼ " if self._expanded.get() else "▶ ") + self._title)
 
     def toggle(self):
         if self._expanded.get():
@@ -225,66 +173,49 @@ class CollapsibleSection(ttk.Frame):
                 pass
         else:
             self._expanded.set(True)
-            self.body.pack(fill="x", padx=10, pady=8)
+            self.body.pack(fill="x", padx=8, pady=8)
         self._refresh()
-
-    def expand(self):
-        if not self._expanded.get():
-            self.toggle()
-
-    def collapse(self):
-        if self._expanded.get():
-            self.toggle()
 
 
 class ScrollableFrame(ttk.Frame):
-    """A vertical scroll container for many controls (works well with accordion)."""
     def __init__(self, master):
         super().__init__(master)
-
-        self.canvas = tk.Canvas(self, highlightthickness=0)
+        self.canvas = tk.Canvas(self, highlightthickness=0, bg="#121820")
         self.vbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.vbar.set)
-
         self.vbar.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
-
         self.interior = ttk.Frame(self.canvas)
-        self._win_id = self.canvas.create_window((0, 0), window=self.interior, anchor="nw")
-
-        def _on_interior_config(_evt):
-            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-
-        def _on_canvas_config(evt):
-            # keep interior width equal to canvas width
-            self.canvas.itemconfigure(self._win_id, width=evt.width)
-
-        self.interior.bind("<Configure>", _on_interior_config)
-        self.canvas.bind("<Configure>", _on_canvas_config)
-
-        # Mouse wheel (Windows/macOS)
+        self.win_id = self.canvas.create_window((0, 0), window=self.interior, anchor="nw")
+        self.interior.bind("<Configure>", lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self.win_id, width=e.width))
         self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
 
     def _on_mousewheel(self, evt):
         try:
-            # Windows: evt.delta is ±120
             self.canvas.yview_scroll(int(-1 * (evt.delta / 120)), "units")
         except Exception:
             pass
 
 
 class EffectFactoryApp(tk.Tk):
+    THUMB_SIZE = (132, 74)
+    HISTORY_MAX = 30
+
     def __init__(self):
         super().__init__()
-        self.title("Effect Factory (素材生成) v2 - Pro effects + loop/preview")
-        self.geometry("920x700")
+        self.title("Effect Factory (素材生成) v2")
+        self.geometry("1440x860")
+        self.minsize(1260, 760)
+        self.configure(bg="#0d1117")
 
         self.msgq = queue.Queue()
         self.busy = False
-
-        # Preview -> Final seed lock
-        self.locked_variant_seed = None  # type: int | None
-        self.locked_variant_mode = None  # type: str | None
+        self._ui_restoring = False
+        self._history_after_id = None
+        self._history = []
+        self._history_index = -1
+        self._history_sig = None
 
         root = os.path.dirname(os.path.abspath(__file__))
         self.effects_dir = os.path.join(root, "effects")
@@ -294,18 +225,14 @@ class EffectFactoryApp(tk.Tk):
 
         self.plugins = load_effects(self.effects_dir)
         if not self.plugins:
-            messagebox.showerror("エラー", "effectsフォルダにプラグインが見つかりません。")
+            messagebox.showerror("エラー", "effects フォルダにプラグインが見つかりません。")
             self.destroy()
             return
-
         self.presets = load_presets(self.presets_dir)
 
-        # Settings
         self.ffmpeg_path = tk.StringVar(value="ffmpeg")
-        self.output_dir = tk.StringVar(value=os.path.join(os.path.expanduser("~"), "Videos", "EffectFactory"))
+        self.output_dir = tk.StringVar(value="C:\\Users\\iro\\Desktop\\共有素材\\effect素材")
         self.file_prefix = tk.StringVar(value="overlay")
-
-        # Output
         self.w = tk.IntVar(value=1920)
         self.h = tk.IntVar(value=1080)
         self.fps = tk.IntVar(value=30)
@@ -313,19 +240,46 @@ class EffectFactoryApp(tk.Tk):
         self.encoder = tk.StringVar(value="h264_nvenc")
         self.nv_preset = tk.StringVar(value="p4")
         self.bitrate = tk.StringVar(value="12M")
-
-        # Loop guarantee
         self.loop_mode = tk.BooleanVar(value=True)
-
-        # Preview
-        self.preview_scale = tk.DoubleVar(value=0.33)   # 0.25/0.33/0.5
-        self.preview_seconds = tk.DoubleVar(value=3.0)  # short
-
-        # Live preview (always-on, low-res, throttled)
+        self.preview_scale = tk.DoubleVar(value=0.33)
+        self.preview_seconds = tk.DoubleVar(value=3.0)
         self.live_preview = tk.BooleanVar(value=True)
         self.live_preview_fps = tk.IntVar(value=15)
         self.live_preview_scale = tk.DoubleVar(value=0.33)
-        self.live_preview_seconds = tk.DoubleVar(value=4.0)  # loop length on preview timeline
+        self.live_preview_seconds = tk.DoubleVar(value=4.0)
+        self.preview_auto_refresh = tk.BooleanVar(value=True)
+        self.show_log = tk.BooleanVar(value=False)
+        self.preview_status = tk.StringVar(value="プレビュー待機中")
+        self.preview_info = tk.StringVar(value="左で見た目を選び、右で少し調整します")
+        self.gallery_filter = tk.StringVar(value="すべて")
+        self.gallery_search = tk.StringVar(value="")
+        self.random_strength = tk.StringVar(value="ふつう")
+        self.random_lock_color = tk.BooleanVar(value=False)
+        self.random_lock_shape = tk.BooleanVar(value=False)
+        self.random_lock_motion = tk.BooleanVar(value=False)
+        self.random_lock_seed = tk.BooleanVar(value=False)
+
+        self.base_seed = tk.IntVar(value=12345)
+        self.randomize = tk.BooleanVar(value=True)
+        self.variant = tk.IntVar(value=1)
+        self.final_seed = tk.IntVar(value=0)
+        self.variant_text = tk.StringVar(value="1")
+        self.final_seed_text = tk.StringVar(value="-")
+        self._state_loaded_outdir = None
+
+        preset_names = list(self.presets.keys())
+        self.preset_name = tk.StringVar(value=(preset_names[0] if preset_names else "（なし）"))
+        self.effect_id = tk.StringVar(value=list(self.plugins.keys())[0])
+        self.selected_gallery_key = None
+        self.param_vars = {}
+        self.param_desc = {}
+        self.param_overrides = set()
+        self.thumb_cache = {}
+        self.gallery_widgets = {}
+        self.gallery_photo_refs = {}
+        self._thumb_request_q = queue.Queue()
+        self._thumb_ready_q = queue.Queue()
+        self._thumb_pending = set()
 
         self._preview_frame_q = queue.Queue(maxsize=1)
         self._preview_rebuild_evt = threading.Event()
@@ -334,280 +288,379 @@ class EffectFactoryApp(tk.Tk):
         self._preview_settings = None
         self._preview_rebuild_after_id = None
         self._preview_photo = None
-        self._preview_cache = None
-        self._preview_plugin_id = None
-        self._preview_frame_i = 0
-
-        # Random strategy
-        self.base_seed = tk.IntVar(value=12345)
-        self.variant_mode = tk.StringVar(value="counter")  # counter/timestamp/random
-        self.randomize = tk.BooleanVar(value=True)
-        self.jitter_pct = tk.DoubleVar(value=10.0)  # if preset has no range, jitter around fixed (%)
-
-        # Selection
-        self.preset_name = tk.StringVar(value=(list(self.presets.keys())[0] if self.presets else "（なし）"))
-        self.effect_id = tk.StringVar(value=list(self.plugins.keys())[0])
-
-        # Dynamic param vars
-        self.param_vars = {}  # key -> tk variable
-        self.param_desc = {}  # key -> descriptor
 
         self._build_ui()
         self._apply_preset(self.presets.get(self.preset_name.get()))
+        self._rebuild_gallery()
         self._rebuild_param_ui()
+        self._sync_variant_from_state(force=True)
+        self._update_random_ui_state()
+        self._refresh_gallery_selection()
+        self._push_history("initial")
 
-        # Live preview start
         self._setup_live_preview_traces()
         threading.Thread(target=self._preview_worker, daemon=True).start()
+        threading.Thread(target=self._thumb_worker, daemon=True).start()
         self.after(33, self._preview_ui_tick)
+        self.after(100, self._process_thumb_queue)
         self._request_preview_rebuild(immediate=True)
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
-
         self.after(120, self._drain_msgs)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _log(self, s: str):
         self.log.insert("end", s + "\n")
         self.log.see("end")
 
-    
     def _build_ui(self):
-        # Root layout: [Top: Preview + Controls] / [Bottom: Log]
-        self.geometry("1240x780")
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
+        root = ttk.Frame(self, padding=10)
+        root.grid(row=0, column=0, sticky="nsew")
+        root.rowconfigure(0, weight=1)
+        root.columnconfigure(0, weight=1)
 
-        vpaned = ttk.Panedwindow(self, orient="vertical")
-        vpaned.pack(fill="both", expand=True, padx=10, pady=10)
+        body = ttk.Panedwindow(root, orient="horizontal")
+        body.grid(row=0, column=0, sticky="nsew")
 
-        top = ttk.Frame(vpaned)
-        bottom = ttk.Frame(vpaned)
-        vpaned.add(top, weight=5)
-        vpaned.add(bottom, weight=1)
+        left = ttk.Frame(body)
+        center = ttk.Frame(body)
+        right = ttk.Frame(body)
+        body.add(left, weight=2)
+        body.add(center, weight=4)
+        body.add(right, weight=3)
 
-        # Top: Preview (left) + Controls (right)
-        hpaned = ttk.Panedwindow(top, orient="horizontal")
-        hpaned.pack(fill="both", expand=True)
+        self._build_gallery_pane(left)
+        self._build_preview_pane(center)
+        self._build_settings_pane(right)
+        self._build_footer(root)
+        self._build_log_area(root)
+        self._log("v2: 生成ロジックを維持したまま初心者向け UI を追加しました。")
 
-        prev_col = ttk.Frame(hpaned)
-        ctrl_col = ttk.Frame(hpaned)
-        hpaned.add(prev_col, weight=3)
-        hpaned.add(ctrl_col, weight=2)
+    def _build_gallery_pane(self, parent):
+        parent.rowconfigure(1, weight=1)
+        parent.columnconfigure(0, weight=1)
+        head = ttk.LabelFrame(parent, text="見た目を選ぶ")
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        ttk.Label(head, text="サムネイルから選ぶと、プリセットとエフェクトが切り替わります。", justify="left").pack(anchor="w", padx=10, pady=(10, 4))
+        tools = ttk.Frame(head)
+        tools.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Entry(tools, textvariable=self.gallery_search).pack(side="left", fill="x", expand=True)
+        ttk.Combobox(tools, textvariable=self.gallery_filter, state="readonly", values=["すべて", "Particles", "Glow", "Lines", "Noise", "Abstract", "Overlay向け", "背景向け"], width=12).pack(side="left", padx=(8, 0))
+        self.gallery_scroll = ScrollableFrame(parent)
+        self.gallery_scroll.grid(row=1, column=0, sticky="nsew")
+        self.gallery_search.trace_add("write", lambda *_: self._rebuild_gallery())
+        self.gallery_filter.trace_add("write", lambda *_: self._rebuild_gallery())
 
-        # -------------------------
-        # LEFT: Live Preview (always visible)
-        # -------------------------
-        prev_box = ttk.LabelFrame(prev_col, text="プレビュー（起動時から動作 / 値変更で自動反映）")
-        prev_box.pack(fill="both", expand=True)
+    def _build_preview_pane(self, parent):
+        parent.rowconfigure(1, weight=1)
+        parent.columnconfigure(0, weight=1)
+        title = ttk.Frame(parent)
+        title.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        ttk.Label(title, text="ライブプレビュー", font=("", 18, "bold")).pack(side="left")
+        ttk.Label(title, text="見た目を選ぶ → 少し調整 → すぐ確認", foreground="#7d8d9a").pack(side="left", padx=12)
 
-        header = ttk.Frame(prev_box)
-        header.pack(fill="x", padx=10, pady=(10, 6))
+        box = ttk.LabelFrame(parent, text="今の見た目")
+        box.grid(row=1, column=0, sticky="nsew")
+        box.rowconfigure(1, weight=1)
+        box.columnconfigure(0, weight=1)
+        bar = ttk.Frame(box)
+        bar.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
+        ttk.Checkbutton(bar, text="自動更新", variable=self.preview_auto_refresh).pack(side="left")
+        ttk.Checkbutton(bar, text="ライブ再生", variable=self.live_preview, command=lambda: self._request_preview_rebuild(immediate=True)).pack(side="left", padx=(8, 0))
+        ttk.Label(bar, text="品質").pack(side="left", padx=(12, 4))
+        ttk.OptionMenu(bar, self.live_preview_scale, self.live_preview_scale.get(), 0.25, 0.33, 0.5, command=lambda *_: self._request_preview_rebuild(immediate=True)).pack(side="left")
+        ttk.Label(bar, text="FPS").pack(side="left", padx=(12, 4))
+        ttk.OptionMenu(bar, self.live_preview_fps, self.live_preview_fps.get(), 10, 15, 20, 30, command=lambda *_: self._request_preview_rebuild(immediate=True)).pack(side="left")
+        wrap = ttk.Frame(box)
+        wrap.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 8))
+        wrap.rowconfigure(0, weight=1)
+        wrap.columnconfigure(0, weight=1)
+        self.preview_label = tk.Label(wrap, bg="#05080b", fg="#dfe8ef", text="プレビュー準備中", font=("", 18, "bold"))
+        self.preview_label.grid(row=0, column=0, sticky="nsew")
+        self.preview_overlay = tk.Label(wrap, bg="#163042", fg="#f6fbff", textvariable=self.preview_status, font=("", 11, "bold"), padx=12, pady=6)
+        self.preview_overlay.place(relx=0.5, rely=0.05, anchor="n")
+        self.preview_overlay.lower()
+        ttk.Label(box, textvariable=self.preview_info, foreground="#8fa0ad").grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
 
-        ttk.Checkbutton(
-            header, text="ON", variable=self.live_preview,
-            command=lambda: self._request_preview_rebuild(immediate=True)
-        ).pack(side="left")
+    def _build_settings_pane(self, parent):
+        parent.rowconfigure(0, weight=1)
+        parent.columnconfigure(0, weight=1)
+        scroll = ScrollableFrame(parent)
+        scroll.grid(row=0, column=0, sticky="nsew")
+        body = scroll.interior
 
-        ttk.Label(header, text="FPS:").pack(side="left", padx=(12, 0))
-        ttk.OptionMenu(
-            header, self.live_preview_fps, self.live_preview_fps.get(),
-            10, 15, 20, 30,
-            command=lambda *_: self._request_preview_rebuild(immediate=True)
-        ).pack(side="left", padx=6)
+        selected = ttk.LabelFrame(body, text="選択中")
+        selected.pack(fill="x", pady=(0, 10))
+        self.selected_title = ttk.Label(selected, text="-", font=("", 16, "bold"))
+        self.selected_title.pack(anchor="w", padx=10, pady=(10, 2))
+        self.selected_meta = ttk.Label(selected, text="", foreground="#8899a7")
+        self.selected_meta.pack(anchor="w", padx=10, pady=(0, 10))
 
-        ttk.Label(header, text="倍率:").pack(side="left", padx=(12, 0))
-        ttk.OptionMenu(
-            header, self.live_preview_scale, self.live_preview_scale.get(),
-            0.25, 0.33, 0.5,
-            command=lambda *_: self._request_preview_rebuild(immediate=True)
-        ).pack(side="left", padx=6)
+        mode = ttk.LabelFrame(body, text="調整")
+        mode.pack(fill="x", pady=(0, 10))
+        ttk.Label(mode, text="主要な項目だけを表示します。迷わず少しずつ見た目を整える前提です。", justify="left").pack(anchor="w", padx=10, pady=10)
 
-        ttk.Label(header, text="ループ秒:").pack(side="left", padx=(12, 0))
-        ttk.Spinbox(
-            header, from_=1.0, to=12.0, increment=0.5,
-            textvariable=self.live_preview_seconds, width=7,
-            command=lambda: self._request_preview_rebuild(immediate=True)
-        ).pack(side="left", padx=6)
+        self.quick_box = ttk.LabelFrame(body, text="かんたん調整")
+        self.quick_box.pack(fill="x", pady=(0, 10))
+        self.quick_frame = ttk.Frame(self.quick_box)
+        self.quick_frame.pack(fill="x", padx=10, pady=10)
 
-        ttk.Button(header, text="次の見た目", command=self._next_preview_variant).pack(side="left", padx=(12, 0))
+        rnd = ttk.LabelFrame(body, text="ランダムと履歴")
+        rnd.pack(fill="x", pady=(0, 10))
+        row = ttk.Frame(rnd)
+        row.pack(fill="x", padx=10, pady=(10, 6))
+        ttk.Button(row, text="ランダム生成", command=self._on_random_generate).pack(side="left")
+        ttk.OptionMenu(row, self.random_strength, self.random_strength.get(), "弱め", "ふつう", "強め").pack(side="left", padx=8)
+        ttk.Button(row, text="Undo", command=self._undo).pack(side="left", padx=(12, 4))
+        ttk.Button(row, text="Redo", command=self._redo).pack(side="left")
+        lock = ttk.Frame(rnd)
+        lock.pack(fill="x", padx=10, pady=(0, 6))
+        ttk.Checkbutton(lock, text="色固定", variable=self.random_lock_color).pack(side="left")
+        ttk.Checkbutton(lock, text="形固定", variable=self.random_lock_shape).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(lock, text="動き固定", variable=self.random_lock_motion).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(lock, text="seed固定", variable=self.random_lock_seed).pack(side="left", padx=(8, 0))
+        self.history_list = tk.Listbox(rnd, height=6, bg="#121820", fg="#dfe8ef", activestyle="none")
+        self.history_list.pack(fill="x", padx=10, pady=(0, 10))
+        self.history_list.bind("<<ListboxSelect>>", self._on_history_pick)
 
-        self.live_seed_text = tk.StringVar(value="seed: -")
-        ttk.Label(header, textvariable=self.live_seed_text).pack(side="right")
+        seed = ttk.LabelFrame(body, text="seed と再現性")
+        seed.pack(fill="x", pady=(0, 10))
+        row = ttk.Frame(seed)
+        row.pack(fill="x", padx=10, pady=(10, 6))
+        ttk.Checkbutton(row, text="毎回別バリエーション", variable=self.randomize, command=self._on_randomize_toggle).pack(side="left")
+        ttk.Label(row, text="base_seed").pack(side="left", padx=(12, 4))
+        ttk.Spinbox(row, from_=0, to=2_000_000_000, increment=1, textvariable=self.base_seed, width=12).pack(side="left")
+        row2 = ttk.Frame(seed)
+        row2.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Label(row2, text="variant").pack(side="left")
+        ttk.Label(row2, textvariable=self.variant_text, width=6).pack(side="left")
+        ttk.Label(row2, text="final_seed").pack(side="left", padx=(8, 0))
+        ttk.Entry(row2, textvariable=self.final_seed_text, state="readonly", width=14).pack(side="left", padx=4)
+        ttk.Button(row2, text="コピー", command=self._copy_final_seed).pack(side="left", padx=4)
+        self.btn_next_variant = ttk.Button(row2, text="次の見た目", command=self._next_preview_variant)
+        self.btn_next_variant.pack(side="left", padx=(8, 0))
 
-        # Image area
-        self.preview_label = ttk.Label(prev_box, anchor="center")
-        self.preview_label.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        help_box = ttk.LabelFrame(body, text="ヘルプ")
+        help_box.pack(fill="x", pady=(0, 10))
+        ttk.Label(help_box, text="密度: 粒や模様の数を増減します\nぼかし: 柔らかい印象にします\n速度: 動きの速さです\nループ長: 何秒で自然につながるかを決めます", justify="left").pack(anchor="w", padx=10, pady=10)
 
-        # -------------------------
-        # RIGHT: Controls (actions fixed + accordion scroll)
-        # -------------------------
-        ctrl_col.rowconfigure(1, weight=1)
-        ctrl_col.columnconfigure(0, weight=1)
-
-        # Actions (fixed)
-        act = ttk.LabelFrame(ctrl_col, text="操作")
-        act.grid(row=0, column=0, sticky="ew")
-        act_col = ttk.Frame(act)
-        act_col.pack(fill="x", padx=10, pady=10)
-
-        self.btn_preview = ttk.Button(act_col, text="プレビュー生成（低解像度MP4）", command=self._on_preview)
+    def _build_footer(self, parent):
+        foot = ttk.LabelFrame(parent, text="書き出し")
+        foot.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        actions = ttk.Frame(foot)
+        actions.pack(fill="x", padx=10, pady=(10, 6))
+        self.btn_preview = ttk.Button(actions, text="プレビュー生成", command=self._on_preview)
         self.btn_preview.pack(side="left")
-
-        self.btn_make = ttk.Button(act_col, text="素材を生成（MP4 + meta.json）", command=self._on_generate)
+        self.btn_make = ttk.Button(actions, text="本生成", command=self._on_generate)
         self.btn_make.pack(side="left", padx=8)
-
-        self.btn_gumroad_zip = ttk.Button(act_col, text="Gumroad用ZIP作成", command=self._on_make_gumroad_zip)
+        self.btn_gumroad_zip = ttk.Button(actions, text="ZIP作成", command=self._on_make_gumroad_zip)
         self.btn_gumroad_zip.pack(side="left", padx=8)
-
-        ttk.Button(act_col, text="コマンド表示", command=self._show_cmd_preview).pack(side="left", padx=8)
-
-        self.pbar = ttk.Progressbar(act, mode="determinate", maximum=100)
+        ttk.Button(actions, text="コマンド表示", command=self._show_cmd_preview).pack(side="left", padx=8)
+        presets = ttk.Frame(foot)
+        presets.pack(fill="x", padx=10, pady=(0, 8))
+        ttk.Label(presets, text="おすすめ書き出し").pack(side="left")
+        for label, cfg in [
+            ("軽量プレビュー", {"w": 1280, "h": 720, "fps": 24, "duration": 4.0, "bitrate": "6M"}),
+            ("標準1080p", {"w": 1920, "h": 1080, "fps": 30, "duration": 10.0, "bitrate": "12M"}),
+            ("高品質", {"w": 2560, "h": 1440, "fps": 30, "duration": 10.0, "bitrate": "20M"}),
+            ("Overlay販売向け", {"w": 1920, "h": 1080, "fps": 30, "duration": 10.0, "bitrate": "14M", "file_prefix": "overlay"}),
+        ]:
+            ttk.Button(presets, text=label, command=lambda c=cfg, n=label: self._apply_quick_export(n, c)).pack(side="left", padx=(8, 0))
+        self.pbar = ttk.Progressbar(foot, mode="determinate", maximum=100)
         self.pbar.pack(fill="x", padx=10, pady=(0, 10))
 
-        # Scrollable accordion area
-        scroll = ScrollableFrame(ctrl_col)
-        scroll.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
-        content = scroll.interior
-
-        # Section: Preset / Effect (open by default)
-        sec0 = CollapsibleSection(content, "プリセット / エフェクト", expanded=True)
-        sec0.pack(fill="x", pady=(0, 10))
-        row = ttk.Frame(sec0.body); row.pack(fill="x", pady=2)
-
-        ttk.Label(row, text="プリセット:").pack(side="left")
-        if self.presets:
-            om = ttk.OptionMenu(
-                row, self.preset_name, self.preset_name.get(),
-                *self.presets.keys(), command=self._on_preset_change
-            )
-            om.pack(side="left", padx=6)
-        else:
-            ttk.Label(row, text="(presetsフォルダにjsonを置くと選べます)").pack(side="left", padx=6)
-
-        ttk.Label(row, text="エフェクト:").pack(side="left", padx=(14, 0))
-        om2 = ttk.OptionMenu(
-            row, self.effect_id, self.effect_id.get(),
-            *self.plugins.keys(),
-            command=lambda *_: (self._rebuild_param_ui(), self._request_preview_rebuild())
-        )
-        om2.pack(side="left", padx=6)
-
-        ttk.Button(row, text="presetsを開く", command=lambda: _open_folder(self.presets_dir)).pack(side="right")
-        ttk.Button(row, text="effectsを開く", command=lambda: _open_folder(self.effects_dir)).pack(side="right", padx=6)
-
-        # Section: Effect params (open by default)
-        sec_params = CollapsibleSection(content, "エフェクトのパラメータ（固定値。プリセットが範囲指定ならそれが優先）", expanded=True)
-        sec_params.pack(fill="x", pady=(0, 10))
-        self.param_frame = ttk.Frame(sec_params.body)
-        self.param_frame.pack(fill="x")
-
-        # Section: Random / Seed
-        sec_rnd = CollapsibleSection(content, "ランダム（同条件で毎回違う + 再現可能）", expanded=False)
-        sec_rnd.pack(fill="x", pady=(0, 10))
-        row = ttk.Frame(sec_rnd.body); row.pack(fill="x", pady=2)
-
-        ttk.Checkbutton(row, text="毎回ランダム化する", variable=self.randomize).pack(side="left")
-        ttk.Label(row, text="base_seed（世界観固定）:").pack(side="left", padx=(12, 0))
-        ttk.Spinbox(row, from_=0, to=2_000_000_000, increment=1, textvariable=self.base_seed, width=14).pack(side="left", padx=6)
-
-        ttk.Label(row, text="variant_mode:").pack(side="left", padx=(12, 0))
-        ttk.OptionMenu(row, self.variant_mode, self.variant_mode.get(), "counter", "timestamp", "random").pack(side="left", padx=6)
-
-        ttk.Label(row, text="ゆらぎ%（範囲無し時）:").pack(side="left", padx=(12, 0))
-        ttk.Spinbox(row, from_=0.0, to=100.0, increment=1.0, textvariable=self.jitter_pct, width=6).pack(side="left", padx=6)
-
-        # Section: Basic settings (collapsed)
-        sec_basic = CollapsibleSection(content, "基本設定", expanded=False)
-        sec_basic.pack(fill="x", pady=(0, 10))
-
-        row = ttk.Frame(sec_basic.body); row.pack(fill="x", pady=2)
-        ttk.Label(row, text="ffmpeg:").pack(side="left")
-        ttk.Entry(row, textvariable=self.ffmpeg_path, width=42).pack(side="left", padx=6)
-        ttk.Button(row, text="参照", command=self._pick_ffmpeg).pack(side="left")
-
-        row = ttk.Frame(sec_basic.body); row.pack(fill="x", pady=6)
-        ttk.Label(row, text="出力フォルダ:").pack(side="left")
-        ttk.Entry(row, textvariable=self.output_dir, width=42).pack(side="left", padx=6)
-        ttk.Button(row, text="選択", command=self._pick_outdir).pack(side="left")
-        ttk.Button(row, text="開く", command=lambda: (_ensure_dir(self.output_dir.get()), _open_folder(self.output_dir.get()))).pack(side="left", padx=6)
-
-        row = ttk.Frame(sec_basic.body); row.pack(fill="x", pady=2)
-        ttk.Label(row, text="接頭辞:").pack(side="left")
-        ttk.Entry(row, textvariable=self.file_prefix, width=18).pack(side="left", padx=6)
-        ttk.Label(row, text="（黒背景オーバーレイ / PV側でScreen/Add合成）").pack(side="left")
-
-        # Section: Output settings (collapsed)
-        sec_out = CollapsibleSection(content, "書き出し設定（NVENC）", expanded=False)
-        sec_out.pack(fill="x", pady=(0, 10))
-
-        row = ttk.Frame(sec_out.body); row.pack(fill="x", pady=2)
-        ttk.Label(row, text="解像度:").pack(side="left")
-        ttk.Spinbox(row, from_=160, to=7680, increment=16, textvariable=self.w, width=7).pack(side="left", padx=4)
-        ttk.Label(row, text="x").pack(side="left")
-        ttk.Spinbox(row, from_=160, to=4320, increment=16, textvariable=self.h, width=7).pack(side="left", padx=4)
-
-        ttk.Label(row, text="FPS:").pack(side="left", padx=(10, 0))
-        ttk.Spinbox(row, from_=1, to=120, increment=1, textvariable=self.fps, width=6).pack(side="left", padx=6)
-
-        ttk.Label(row, text="秒数:").pack(side="left", padx=(10, 0))
-        ttk.Spinbox(row, from_=1.0, to=120.0, increment=0.5, textvariable=self.duration, width=8).pack(side="left", padx=6)
-
-        row = ttk.Frame(sec_out.body); row.pack(fill="x", pady=6)
-        ttk.Label(row, text="encoder:").pack(side="left")
-        ttk.OptionMenu(row, self.encoder, self.encoder.get(), "h264_nvenc", "hevc_nvenc", "av1_nvenc").pack(side="left", padx=6)
-
-        ttk.Label(row, text="bitrate:").pack(side="left", padx=(10, 0))
-        ttk.Entry(row, textvariable=self.bitrate, width=10).pack(side="left", padx=6)
-
-        ttk.Label(row, text="preset:").pack(side="left", padx=(10, 0))
-        ttk.OptionMenu(row, self.nv_preset, self.nv_preset.get(), "p1", "p2", "p3", "p4", "p5", "p6", "p7").pack(side="left", padx=6)
-
-        ttk.Checkbutton(row, text="ループ保証（頭尾一致）", variable=self.loop_mode).pack(side="left", padx=(14, 0))
-
-        # Section: Preview MP4 settings (collapsed)
-        sec_prevmp4 = CollapsibleSection(content, "プレビューMP4設定（低解像度→本番の見た目確認）", expanded=False)
-        sec_prevmp4.pack(fill="x", pady=(0, 10))
-
-        row = ttk.Frame(sec_prevmp4.body); row.pack(fill="x", pady=2)
-        ttk.Label(row, text="倍率:").pack(side="left")
-        ttk.OptionMenu(row, self.preview_scale, self.preview_scale.get(), 0.25, 0.33, 0.5).pack(side="left", padx=6)
-        ttk.Label(row, text="秒数:").pack(side="left", padx=(12, 0))
-        ttk.Spinbox(row, from_=1.0, to=10.0, increment=0.5, textvariable=self.preview_seconds, width=8).pack(side="left", padx=6)
-        ttk.Label(row, text="（次の本番生成と同じseedで作られます）").pack(side="left", padx=(8, 0))
-
-        # -------------------------
-        # Bottom: Log
-        # -------------------------
-        log_box = ttk.LabelFrame(bottom, text="ログ")
-        log_box.pack(fill="both", expand=True)
-
-        self.log = tk.Text(log_box, height=8)
+    def _build_log_area(self, parent):
+        wrap = ttk.Frame(parent)
+        wrap.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        bar = ttk.Frame(wrap)
+        bar.pack(fill="x")
+        ttk.Button(bar, text="ログ表示 / 非表示", command=self._toggle_log).pack(side="left")
+        ttk.Label(bar, text="普段は閉じたままでも使えます", foreground="#7c8d9a").pack(side="left", padx=10)
+        self.log_box = ttk.LabelFrame(wrap, text="ログ")
+        self.log_box.pack(fill="both", expand=True, pady=(6, 0))
+        self.log = tk.Text(self.log_box, height=7, bg="#10161d", fg="#dfe8ef", insertbackground="#ffffff")
         self.log.pack(fill="both", expand=True, padx=10, pady=10)
+        self._toggle_log(force=False)
 
-        self._log("✅ v2: ループ保証 / プレビュー対応。素材は黒背景MP4で出力します。PV側でScreen/Add合成推奨。\n")
+    def _toggle_log(self, force=None):
+        if force is None:
+            self.show_log.set(not self.show_log.get())
+        else:
+            self.show_log.set(bool(force))
+        if self.show_log.get():
+            self.log_box.pack(fill="both", expand=True, pady=(6, 0))
+        else:
+            self.log_box.pack_forget()
 
-    def _pick_ffmpeg(self):
-        p = filedialog.askopenfilename(title="ffmpeg.exe を選択", filetypes=[("ffmpeg", "ffmpeg.exe"), ("All", "*.*")])
-        if p:
-            self.ffmpeg_path.set(p)
+    def _gallery_items(self):
+        items = []
+        for name, preset in self.presets.items():
+            effect_id = preset.get("effect_id")
+            plugin = self.plugins.get(effect_id)
+            if not plugin:
+                continue
+            items.append({"kind": "preset", "id": name, "title": name, "effect_id": effect_id, "plugin_name": plugin.name, "category": _effect_category(effect_id, plugin.name), "usage": _effect_usage(effect_id, plugin.name)})
+        preset_effects = {x["effect_id"] for x in items}
+        for effect_id, plugin in self.plugins.items():
+            if effect_id in preset_effects:
+                continue
+            items.append({"kind": "effect", "id": effect_id, "title": plugin.name, "effect_id": effect_id, "plugin_name": plugin.name, "category": _effect_category(effect_id, plugin.name), "usage": _effect_usage(effect_id, plugin.name)})
+        return items
 
-    def _pick_outdir(self):
-        p = filedialog.askdirectory(title="出力フォルダを選択")
-        if p:
-            self.output_dir.set(p)
+    def _rebuild_gallery(self):
+        for c in self.gallery_scroll.interior.winfo_children():
+            c.destroy()
+        self.gallery_widgets.clear()
+        self.gallery_photo_refs.clear()
+        q = self.gallery_search.get().strip().lower()
+        f = self.gallery_filter.get()
+        for item in self._gallery_items():
+            text = " ".join([item["title"], item["plugin_name"], item["category"], item["usage"]]).lower()
+            if q and q not in text:
+                continue
+            if f != "すべて" and f not in [item["category"], item["usage"]]:
+                continue
+            card = ttk.Frame(self.gallery_scroll.interior)
+            card.pack(fill="x", pady=(0, 8))
+            thumb = tk.Label(
+                card,
+                bg="#1c2630",
+                fg="#dfe8ef",
+                width=self.THUMB_SIZE[0],
+                height=self.THUMB_SIZE[1],
+                text="loading",
+                relief="flat",
+                bd=3,
+                cursor="hand2",
+            )
+            thumb.pack(fill="x", expand=True)
+            thumb.bind("<Button-1>", lambda _e, i=item: self._select_gallery_item(i))
+            key = (item["kind"], item["id"])
+            self.gallery_widgets[key] = (card, thumb)
+            self._queue_thumb(item)
+        self._refresh_gallery_selection()
 
-    def _on_preset_change(self, *_):
+    def _queue_thumb(self, item):
+        key = (item["kind"], item["id"])
+        if key in self.thumb_cache:
+            self._apply_thumb_widget(item, self.thumb_cache[key])
+            return
+        if key in self._thumb_pending:
+            return
+        self._thumb_pending.add(key)
+        self._thumb_request_q.put(item)
+
+    def _thumb_worker(self):
+        while not self._preview_stop_evt.is_set():
+            try:
+                item = self._thumb_request_q.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                img = self._render_thumb(item)
+                self._thumb_ready_q.put((item, img))
+            except Exception:
+                self._thumb_ready_q.put((item, None))
+            finally:
+                self._thumb_pending.discard((item["kind"], item["id"]))
+
+    def _process_thumb_queue(self):
+        try:
+            while True:
+                item, img = self._thumb_ready_q.get_nowait()
+                if img is None:
+                    continue
+                key = (item["kind"], item["id"])
+                self.thumb_cache[key] = img
+                self._apply_thumb_widget(item, img)
+        except queue.Empty:
+            pass
+        if not self._preview_stop_evt.is_set():
+            self.after(100, self._process_thumb_queue)
+
+    def _render_thumb(self, item):
+        preset = self.presets.get(item["id"]) if item["kind"] == "preset" else None
+        plugin = self.plugins[item["effect_id"]]
+        w, h, frames = 320, 180, 20
+        params = {p["key"]: p.get("default") for p in plugin.params}
+        seed = 12345
+        if preset:
+            rng = np.random.default_rng(_hash_seed(preset.get("random", {}).get("base_seed", 12345), preset["name"], plugin.id, "thumb"))
+            for p in plugin.params:
+                key = p["key"]
+                spec = (preset.get("params", {}) or {}).get(key)
+                params[key] = resolve_value(rng, spec, params[key], pdesc=p)
+            seed = _hash_seed(seed, preset["name"], plugin.id, json.dumps(params, sort_keys=True))
+        params["__loop__"] = True
+        params["__frames__"] = frames
+        params["__fps__"] = 12
+        cache = plugin.build_cache(w=w, h=h, frames=frames, seed=seed, params=params)
+        img = plugin.render_frame(cache, frames // 3)
+        return ImageOps.fit(img, self.THUMB_SIZE, method=Image.Resampling.LANCZOS)
+
+    def _apply_thumb_widget(self, item, img):
+        key = (item["kind"], item["id"])
+        if key not in self.gallery_widgets:
+            return
+        _card, thumb = self.gallery_widgets[key]
+        photo = ImageTk.PhotoImage(img)
+        thumb.configure(image=photo, text="")
+        thumb.image = photo
+        self.gallery_photo_refs[key] = photo
+
+    def _select_gallery_item(self, item):
+        self._push_history("before_select")
+        self.selected_gallery_key = (item["kind"], item["id"])
+        if item["kind"] == "preset":
+            self.preset_name.set(item["id"])
+            self._on_preset_change(push_history=False)
+        else:
+            self.effect_id.set(item["effect_id"])
+            self.param_overrides.clear()
+            self._rebuild_param_ui()
+            self._update_selection_labels()
+            self._request_preview_rebuild()
+        self._refresh_gallery_selection()
+        self._schedule_history("select")
+
+    def _refresh_gallery_selection(self):
+        current = self.selected_gallery_key
+        if current is None:
+            current = ("preset", self.preset_name.get()) if self.preset_name.get() in self.presets else ("effect", self.effect_id.get())
+        for key, (card, thumb) in self.gallery_widgets.items():
+            if key == current:
+                thumb.configure(bg="#3a6f95", highlightbackground="#77b8ea", highlightcolor="#77b8ea", highlightthickness=3, bd=3)
+            else:
+                thumb.configure(bg="#1c2630", highlightthickness=0, bd=3)
+
+    def _update_selection_labels(self):
+        preset = self.presets.get(self.preset_name.get())
+        plugin = self.plugins[self.effect_id.get()]
+        category = _effect_category(plugin.id, plugin.name)
+        usage = _effect_usage(plugin.id, plugin.name)
+        self.selected_title.configure(text=(preset.get("name") if preset else plugin.name))
+        self.selected_meta.configure(text=f"{category} / {usage} / effect: {plugin.name}")
+        self.preview_info.set(f"{plugin.name} を表示中。かんたん調整を触るとプレビューへ自動反映します。")
+
+    def _on_preset_change(self, *_args, push_history=True):
         self.presets = load_presets(self.presets_dir)
-        p = self.presets.get(self.preset_name.get())
-        self._apply_preset(p)
+        preset = self.presets.get(self.preset_name.get())
+        self._apply_preset(preset)
+        self.param_overrides.clear()
         self._rebuild_param_ui()
+        self._update_selection_labels()
+        self.selected_gallery_key = ("preset", self.preset_name.get())
+        self._refresh_gallery_selection()
+        self._on_randomize_toggle()
+        if push_history:
+            self._schedule_history("preset")
 
     def _apply_preset(self, preset):
         if not preset:
+            self._update_selection_labels()
             return
-        # effect
         if preset.get("effect_id") in self.plugins:
             self.effect_id.set(preset["effect_id"])
-        # output
         out = preset.get("output", {})
         if "w" in out: self.w.set(int(out["w"]))
         if "h" in out: self.h.set(int(out["h"]))
@@ -616,149 +669,447 @@ class EffectFactoryApp(tk.Tk):
         if "bitrate" in out: self.bitrate.set(str(out["bitrate"]))
         if "encoder" in out: self.encoder.set(str(out["encoder"]))
         if "nv_preset" in out: self.nv_preset.set(str(out["nv_preset"]))
-
-        # random
         rnd = preset.get("random", {})
         if "base_seed" in rnd: self.base_seed.set(int(rnd["base_seed"]))
-        if "variant_mode" in rnd: self.variant_mode.set(str(rnd["variant_mode"]))
-
-        # loop
+        if "every_time_variant" in rnd:
+            self.randomize.set(bool(rnd["every_time_variant"]))
+        elif "randomize" in rnd:
+            self.randomize.set(bool(rnd["randomize"]))
         if "loop_mode" in preset:
             self.loop_mode.set(bool(preset["loop_mode"]))
+        self._update_selection_labels()
+
+    def _new_var(self, p, value):
+        t = p.get("type", "float")
+        if t == "int":
+            return tk.IntVar(value=int(value))
+        if t == "choice":
+            choices = p.get("choices", [])
+            value = str(value)
+            if choices and value not in choices:
+                value = str(choices[0])
+            return tk.StringVar(value=value)
+        if t == "bool":
+            return tk.BooleanVar(value=bool(value))
+        return tk.DoubleVar(value=float(value))
 
     def _rebuild_param_ui(self):
-        for c in self.param_frame.winfo_children():
+        for c in self.quick_frame.winfo_children():
             c.destroy()
+        plugin = self.plugins[self.effect_id.get()]
+        existing = {k: v.get() for k, v in self.param_vars.items()}
         self.param_vars.clear()
         self.param_desc.clear()
-
-        plugin = self.plugins[self.effect_id.get()]
-
         for p in plugin.params:
-            key = p["key"]
-            self.param_desc[key] = p
-            ptype = p.get("type", "float")
-            default = p.get("default", 0)
+            self.param_desc[p["key"]] = p
+            var = self._new_var(p, existing.get(p["key"], p.get("default", 0)))
+            self.param_vars[p["key"]] = var
+            var.trace_add("write", lambda *_a, key=p["key"]: self._on_param_var_changed(key))
+        self._build_quick_controls(plugin)
+        self._update_selection_labels()
 
-            row = ttk.Frame(self.param_frame)
-            row.pack(fill="x", pady=4)
+    def _on_param_var_changed(self, key):
+        if not self._ui_restoring:
+            self.param_overrides.add(key)
+        self._on_ui_value_changed()
 
-            ttk.Label(row, text=p.get("label", key), width=24).pack(side="left")
+    def _quick_specs(self, plugin):
+        defs = [
+            ("density", "密度", "粒や模様の数を増減します", ["density", "count", "strength", "intensity"]),
+            ("size", "サイズ", "要素の大きさや太さです", ["width", "size_max", "size_min"]),
+            ("speed", "速度", "動きの速さです", ["speed", "sweep"]),
+            ("blur", "ぼかし", "柔らかい印象にします", ["blur", "blur_far", "blur_mid", "blur_near"]),
+            ("brightness", "明るさ", "全体の光り方を調整します", ["brightness", "glow_strength", "glow", "strength"]),
+            ("random", "ランダム感", "揺らぎやノイズの量です", ["twinkle", "flicker", "noise", "scanlines", "grain"]),
+            ("color", "色味", "色の印象を切り替えます", ["color", "tint", "palette", "tint_r"]),
+        ]
+        used, out = set(), []
+        for cid, label, help_text, keys in defs:
+            match = [k for k in keys if k in self.param_desc and k not in used]
+            if not match:
+                continue
+            out.append({"id": cid, "label": label, "help": help_text, "keys": match})
+            used.update(match)
+        out.append({"id": "loop_length", "label": "ループ長", "help": "何秒で自然につながるかを決めます", "duration": True})
+        return out[:7]
 
-            if ptype == "int":
-                var = tk.IntVar(value=int(default))
-                ttk.Spinbox(row, from_=p.get("min", 0), to=p.get("max", 999999), increment=p.get("step", 1), textvariable=var, width=10).pack(side="left", padx=6)
-            elif ptype == "choice":
-                var = tk.StringVar(value=str(default))
-                choices = p.get("choices", [])
-                if choices and str(default) not in choices:
-                    var.set(str(choices[0]))
-                ttk.OptionMenu(row, var, var.get(), *choices).pack(side="left", padx=6)
-            elif ptype == "bool":
-                var = tk.BooleanVar(value=bool(default))
-                ttk.Checkbutton(row, variable=var).pack(side="left", padx=6)
+    def _build_quick_controls(self, plugin):
+        specs = self._quick_specs(plugin)
+        if not specs:
+            ttk.Label(self.quick_frame, text="このエフェクトは現在の簡単調整に対応していません。", justify="left").pack(anchor="w")
+            return
+        for spec in specs:
+            row = ttk.Frame(self.quick_frame)
+            row.pack(fill="x", pady=6)
+            ttk.Label(row, text=spec["label"], width=10).pack(side="left")
+            if spec.get("duration"):
+                value = ttk.Label(row, width=8, text=f"{self.duration.get():.1f}s")
+                def apply_duration(_v=None, lbl=value):
+                    if lbl.winfo_exists():
+                        lbl.configure(text=f"{self.duration.get():.1f}s")
+                    self._on_ui_value_changed()
+                scale = ttk.Scale(row, from_=1.0, to=20.0, variable=self.duration, command=apply_duration)
+                scale.pack(side="left", fill="x", expand=True, padx=8)
+                value.pack(side="left")
+            elif spec["id"] == "color" and all(k in self.param_vars for k in ["tint_r", "tint_g", "tint_b"]):
+                avg_var = tk.DoubleVar(value=sum(float(self.param_vars[k].get()) for k in ["tint_r", "tint_g", "tint_b"]) / 3.0)
+                def apply_color(_v=None):
+                    avg = float(avg_var.get())
+                    for k in ["tint_r", "tint_g", "tint_b"]:
+                        self.param_vars[k].set(round(avg, 3))
+                ttk.Scale(row, from_=0.6, to=1.4, variable=avg_var, command=apply_color).pack(side="left", fill="x", expand=True, padx=8)
+                value = ttk.Label(row, width=8)
+                value.pack(side="left")
+                def sync_color(*_):
+                    if not value.winfo_exists():
+                        return
+                    avg = sum(float(self.param_vars[k].get()) for k in ["tint_r", "tint_g", "tint_b"]) / 3.0
+                    value.configure(text=f"{avg:.2f}")
+                for k in ["tint_r", "tint_g", "tint_b"]:
+                    self.param_vars[k].trace_add("write", sync_color)
+                sync_color()
+            elif spec["id"] == "size":
+                self._build_size_quick_control(row, spec)
             else:
-                var = tk.DoubleVar(value=float(default))
-                ttk.Spinbox(row, from_=p.get("min", 0.0), to=p.get("max", 999999.0), increment=p.get("step", 0.1), textvariable=var, width=10).pack(side="left", padx=6)
+                key = spec["keys"][0]
+                p = self.param_desc[key]
+                var = self.param_vars[key]
+                if p.get("type") == "choice":
+                    ttk.OptionMenu(row, var, var.get(), *p.get("choices", [])).pack(side="left", fill="x", expand=True, padx=8)
+                    ttk.Label(row, width=8, text=str(var.get())).pack(side="left")
+                    ttk.Label(self.quick_frame, text=spec["help"], foreground="#8193a0").pack(anchor="w", padx=(4, 0), pady=(0, 2))
+                    continue
+                low = float(p.get("min", 0.0))
+                high = float(p.get("max", 10.0))
+                scale_var = tk.DoubleVar(value=float(var.get()))
+                def apply_scalar(_v=None, k=key, desc=p, sv=scale_var):
+                    if desc.get("type") == "int":
+                        self.param_vars[k].set(int(round(sv.get())))
+                    else:
+                        self.param_vars[k].set(round(float(sv.get()), 3))
+                ttk.Scale(row, from_=low, to=high, variable=scale_var, command=apply_scalar).pack(side="left", fill="x", expand=True, padx=8)
+                value = ttk.Label(row, width=8)
+                value.pack(side="left")
+                def sync_scalar(*_a, k=key, desc=p, lbl=value, sv=scale_var):
+                    if not lbl.winfo_exists():
+                        return
+                    sv.set(float(self.param_vars[k].get()))
+                    if desc.get("type") == "int":
+                        lbl.configure(text=str(int(self.param_vars[k].get())))
+                    else:
+                        lbl.configure(text=f"{float(self.param_vars[k].get()):.2f}")
+                var.trace_add("write", sync_scalar)
+                sync_scalar()
+            ttk.Label(self.quick_frame, text=spec["help"], foreground="#8193a0").pack(anchor="w", padx=(4, 0), pady=(0, 2))
 
-            self.param_vars[key] = var
-            # Any param change -> refresh live preview (debounced)
+    def _build_size_quick_control(self, row, spec):
+        keys = [k for k in spec["keys"] if k in self.param_vars]
+        base_values = {k: float(self.param_vars[k].get()) for k in keys}
+        if not keys:
+            ttk.Label(row, text="-").pack(side="left")
+            return
+        lows = [float(self.param_desc[k].get("min", 0.0)) for k in keys]
+        highs = [float(self.param_desc[k].get("max", max(lows[0] + 1.0, 1.0))) for k in keys]
+        normalized = []
+        for k, lo, hi in zip(keys, lows, highs):
+            span = max(1e-6, hi - lo)
+            normalized.append((base_values[k] - lo) / span)
+        slider_value = sum(normalized) / len(normalized)
+        scale_var = tk.DoubleVar(value=slider_value)
+        value = ttk.Label(row, width=8, text=f"{slider_value * 100:.0f}%")
+        value.pack(side="left")
+
+        def apply_size(_v=None):
+            pos = float(scale_var.get())
+            for k, lo, hi in zip(keys, lows, highs):
+                span = hi - lo
+                new_val = lo + span * pos
+                if self.param_desc[k].get("type") == "int":
+                    self.param_vars[k].set(int(round(new_val)))
+                else:
+                    self.param_vars[k].set(round(new_val, 3))
+            if value.winfo_exists():
+                value.configure(text=f"{pos * 100:.0f}%")
+
+        def sync_size(*_):
+            if not value.winfo_exists():
+                return
+            vals = []
+            for k, lo, hi in zip(keys, lows, highs):
+                span = max(1e-6, hi - lo)
+                vals.append((float(self.param_vars[k].get()) - lo) / span)
+            pos = max(0.0, min(1.0, sum(vals) / len(vals)))
+            scale_var.set(pos)
+            value.configure(text=f"{pos * 100:.0f}%")
+
+        ttk.Scale(row, from_=0.0, to=1.0, variable=scale_var, command=lambda _v=None: (apply_size(), self._on_ui_value_changed())).pack(side="left", fill="x", expand=True, padx=8)
+        for k in keys:
+            self.param_vars[k].trace_add("write", sync_size)
+        sync_size()
+
+    def _pretty_label(self, p):
+        return {
+            "brightness": "明るさ", "speed": "速度", "grain": "グレイン", "glow": "グロー",
+            "glow_strength": "グロー強さ", "glow_radius": "グロー広がり", "mblur_samples": "モーションブラー",
+            "layers": "奥行きレイヤ数", "blur_far": "遠景ぼけ", "blur_mid": "中景ぼけ", "blur_near": "近景ぼけ",
+            "drift_x_cycles": "横移動", "drift_y_cycles": "縦移動", "size_min": "最小サイズ", "size_max": "最大サイズ",
+            "count": "数", "density": "密度", "palette": "色プリセット", "tint": "色味"
+        }.get(p["key"], p.get("label", p["key"]))
+
+    def _on_ui_value_changed(self):
+        if self._ui_restoring:
+            return
+        self._schedule_history("edit")
+        if self.preview_auto_refresh.get():
+            self._request_preview_rebuild()
+
+    def _snapshot_state(self):
+        return {
+            "preset_name": self.preset_name.get(),
+            "effect_id": self.effect_id.get(),
+            "output": {
+                "w": int(self.w.get()), "h": int(self.h.get()), "fps": int(self.fps.get()), "duration": float(self.duration.get()),
+                "encoder": self.encoder.get(), "nv_preset": self.nv_preset.get(), "bitrate": self.bitrate.get(),
+                "preview_scale": float(self.preview_scale.get()), "preview_seconds": float(self.preview_seconds.get()),
+                "live_preview_scale": float(self.live_preview_scale.get()), "live_preview_fps": int(self.live_preview_fps.get()),
+                "live_preview_seconds": float(self.live_preview_seconds.get()), "output_dir": self.output_dir.get(),
+                "file_prefix": self.file_prefix.get(), "loop_mode": bool(self.loop_mode.get())
+            },
+            "random": {"base_seed": int(self.base_seed.get()), "randomize": bool(self.randomize.get()), "variant": int(self.variant.get())},
+            "params": {k: v.get() for k, v in self.param_vars.items()},
+            "param_overrides": sorted(self.param_overrides),
+        }
+
+    def _schedule_history(self, reason):
+        if self._ui_restoring:
+            return
+        if self._history_after_id is not None:
             try:
-                var.trace_add("write", lambda *_: self._request_preview_rebuild())
+                self.after_cancel(self._history_after_id)
             except Exception:
                 pass
+        self._history_after_id = self.after(260, lambda r=reason: self._push_history(r))
 
-            hint = p.get("hint")
-            if hint:
-                ttk.Label(row, text=hint).pack(side="left", padx=10)
+    def _push_history(self, reason):
+        self._history_after_id = None
+        snap = self._snapshot_state()
+        sig = json.dumps(snap, sort_keys=True, ensure_ascii=True, default=str)
+        if sig == self._history_sig:
+            return
+        labels = {"initial": "初期状態", "preset": "プリセット変更", "select": "見た目選択", "edit": "調整", "random": "ランダム生成", "export": "書き出しプリセット", "before_select": "選択前"}
+        title = snap["preset_name"] if snap["preset_name"] in self.presets else snap["effect_id"]
+        item = {"label": f"{labels.get(reason, reason)}: {title}", "state": snap}
+        if self._history_index < len(self._history) - 1:
+            self._history = self._history[:self._history_index + 1]
+        self._history.append(item)
+        if len(self._history) > self.HISTORY_MAX:
+            self._history = self._history[-self.HISTORY_MAX:]
+        self._history_index = len(self._history) - 1
+        self._history_sig = sig
+        self._refresh_history_list()
+
+    def _refresh_history_list(self):
+        self.history_list.delete(0, "end")
+        for i, item in enumerate(self._history):
+            self.history_list.insert("end", ("● " if i == self._history_index else "  ") + item["label"])
+        if self._history:
+            self.history_list.selection_clear(0, "end")
+            self.history_list.selection_set(self._history_index)
+
+    def _restore_history(self, index):
+        if not (0 <= index < len(self._history)):
+            return
+        snap = self._history[index]["state"]
+        self._ui_restoring = True
+        try:
+            self.preset_name.set(snap["preset_name"])
+            self.effect_id.set(snap["effect_id"])
+            out = snap["output"]
+            self.w.set(int(out["w"])); self.h.set(int(out["h"])); self.fps.set(int(out["fps"])); self.duration.set(float(out["duration"]))
+            self.encoder.set(out["encoder"]); self.nv_preset.set(out["nv_preset"]); self.bitrate.set(out["bitrate"])
+            self.preview_scale.set(float(out["preview_scale"])); self.preview_seconds.set(float(out["preview_seconds"]))
+            self.live_preview_scale.set(float(out["live_preview_scale"])); self.live_preview_fps.set(int(out["live_preview_fps"])); self.live_preview_seconds.set(float(out["live_preview_seconds"]))
+            self.output_dir.set(out["output_dir"]); self.file_prefix.set(out["file_prefix"]); self.loop_mode.set(bool(out["loop_mode"]))
+            rnd = snap["random"]
+            self.base_seed.set(int(rnd["base_seed"])); self.randomize.set(bool(rnd["randomize"])); self.variant.set(int(rnd["variant"])); self.variant_text.set(str(int(rnd["variant"])))
+            self._apply_preset(self.presets.get(self.preset_name.get()))
+            self.param_overrides = set(snap.get("param_overrides", []))
+            self._rebuild_param_ui()
+            for key, value in snap["params"].items():
+                if key in self.param_vars:
+                    self.param_vars[key].set(value)
+            self.selected_gallery_key = ("preset", self.preset_name.get()) if self.preset_name.get() in self.presets else ("effect", self.effect_id.get())
+            self._refresh_gallery_selection()
+            self._update_selection_labels()
+            self._update_random_ui_state()
+        finally:
+            self._ui_restoring = False
+        self._history_index = index
+        self._history_sig = json.dumps(self._snapshot_state(), sort_keys=True, ensure_ascii=True, default=str)
+        self._refresh_history_list()
+        self._request_preview_rebuild(immediate=True)
+
+    def _undo(self):
+        if self._history_index > 0:
+            self._restore_history(self._history_index - 1)
+
+    def _redo(self):
+        if self._history_index < len(self._history) - 1:
+            self._restore_history(self._history_index + 1)
+
+    def _on_history_pick(self, _evt):
+        if self.history_list.curselection():
+            idx = int(self.history_list.curselection()[0])
+            if idx != self._history_index:
+                self._restore_history(idx)
+
+    def _update_random_ui_state(self):
+        self.variant_text.set(str(int(self.variant.get())))
+        self.final_seed_text.set(str(int(self.final_seed.get())) if int(self.final_seed.get()) > 0 else "-")
+        if hasattr(self, "btn_next_variant"):
+            self.btn_next_variant.config(state=("normal" if self.randomize.get() and not self.busy else "disabled"))
+
+    def _on_randomize_toggle(self):
+        try:
+            if self.randomize.get():
+                self._sync_variant_from_state(force=True)
+            else:
+                self._set_variant(1, persist=False)
+            self._update_random_ui_state()
+            self._request_preview_rebuild(immediate=True)
+        except Exception as e:
+            self.msgq.put(("err", str(e)))
+
+    def _copy_final_seed(self):
+        try:
+            val = self.final_seed_text.get().strip()
+            if not val or val == "-":
+                return
+            self.clipboard_clear(); self.clipboard_append(val)
+            self._log(f"[RANDOM] copied final_seed={val}")
+        except Exception as e:
+            self.msgq.put(("err", str(e)))
+
+    def _on_random_generate(self):
+        self._push_history("random")
+        rng = np.random.default_rng(int(time.time() * 1000) & 0x7FFFFFFF)
+        ratio = {"弱め": 0.18, "ふつう": 0.33, "強め": 0.52}.get(self.random_strength.get(), 0.33)
+        groups = {
+            "color": {"color", "tint", "palette", "tint_r", "tint_g", "tint_b", "nebula_r", "nebula_g", "nebula_b"},
+            "shape": {"count", "density", "size_min", "size_max", "width", "layers", "shooting_stars"},
+            "motion": {"speed", "sweep", "flicker", "twinkle", "drift_x_cycles", "drift_y_cycles", "tear_prob"},
+        }
+        locked = set()
+        if self.random_lock_color.get(): locked |= groups["color"]
+        if self.random_lock_shape.get(): locked |= groups["shape"]
+        if self.random_lock_motion.get(): locked |= groups["motion"]
+        if not self.random_lock_seed.get():
+            if self.randomize.get():
+                self._set_variant(int(self.variant.get()) + 1, persist=True)
+            else:
+                self.base_seed.set(int(rng.integers(1, 2_000_000_000)))
+        for key, desc in self.param_desc.items():
+            if key in locked:
+                continue
+            var = self.param_vars[key]
+            t = desc.get("type", "float")
+            if t == "choice":
+                choices = desc.get("choices", [])
+                if choices:
+                    var.set(str(rng.choice(choices)))
+            elif t == "bool":
+                if rng.random() < ratio:
+                    var.set(not bool(var.get()))
+            else:
+                lo = float(desc.get("min", 0.0)); hi = float(desc.get("max", max(lo + 1.0, 1.0)))
+                cur = float(var.get()); new_val = min(hi, max(lo, cur + (hi - lo) * ratio * float(rng.uniform(-1, 1))))
+                var.set(int(round(new_val)) if t == "int" else round(new_val, 3))
+            self.param_overrides.add(key)
+        self._schedule_history("random")
+        self._request_preview_rebuild(immediate=True)
+
+    def _apply_quick_export(self, name, cfg):
+        if "w" in cfg: self.w.set(int(cfg["w"]))
+        if "h" in cfg: self.h.set(int(cfg["h"]))
+        if "fps" in cfg: self.fps.set(int(cfg["fps"]))
+        if "duration" in cfg: self.duration.set(float(cfg["duration"]))
+        if "bitrate" in cfg: self.bitrate.set(str(cfg["bitrate"]))
+        if "file_prefix" in cfg: self.file_prefix.set(cfg["file_prefix"])
+        self._log(f"[EXPORT] quick preset applied: {name}")
+        self._schedule_history("export")
+        self._request_preview_rebuild(immediate=True)
 
     def _state_path(self, outdir: str):
         return os.path.join(outdir, "_state.json")
 
-    def _peek_next_counter(self, outdir: str) -> int:
-        st = _read_json(self._state_path(outdir), default={"counter": 0})
-        c = int(st.get("counter", 0)) + 1
-        return c
+    def _read_state_variant(self, outdir: str) -> int:
+        st = _read_json(self._state_path(outdir), default={}) or {}
+        raw = st.get("variant", st.get("counter", 1))
+        try:
+            return max(1, int(raw))
+        except Exception:
+            return 1
 
-    def _commit_counter(self, outdir: str, counter_value: int):
-        st = _read_json(self._state_path(outdir), default={"counter": 0})
-        st["counter"] = int(counter_value)
-        _write_json(self._state_path(outdir), st)
+    def _write_state_variant(self, outdir: str, variant: int):
+        _ensure_dir(outdir)
+        _write_json(self._state_path(outdir), {"variant": int(max(1, variant))})
 
-    def _next_variant_seed(self, outdir: str, advance_state: bool) -> int:
-        mode = self.variant_mode.get()
-        if mode == "timestamp":
-            return int(time.time_ns() & 0x7FFFFFFF)
-        if mode == "random":
-            return int.from_bytes(os.urandom(4), "big") & 0x7FFFFFFF
-        # counter
-        if advance_state:
-            st = _read_json(self._state_path(outdir), default={"counter": 0})
-            c = int(st.get("counter", 0)) + 1
-            st["counter"] = c
-            _write_json(self._state_path(outdir), st)
-            return c
-        return self._peek_next_counter(outdir)
+    def _set_variant(self, value: int, persist: bool = False):
+        v = max(1, int(value))
+        self.variant.set(v)
+        self.variant_text.set(str(v))
+        if persist and self.randomize.get():
+            outdir = self.output_dir.get().strip()
+            if outdir:
+                self._write_state_variant(outdir, v)
+
+    def _sync_variant_from_state(self, force: bool = False):
+        outdir = self.output_dir.get().strip()
+        if not outdir:
+            self._set_variant(1, persist=False)
+            return
+        abso = os.path.abspath(outdir)
+        if not force and self._state_loaded_outdir == abso:
+            return
+        self._state_loaded_outdir = abso
+        if self.randomize.get():
+            v = self._read_state_variant(outdir)
+            self._set_variant(v, persist=False)
+            if not os.path.isfile(self._state_path(outdir)):
+                self._write_state_variant(outdir, v)
+        else:
+            self._set_variant(1, persist=False)
 
     def _collect_fixed_params(self):
-        out = {}
-        for key, var in self.param_vars.items():
-            out[key] = var.get()
-        return out
+        return {key: var.get() for key, var in self.param_vars.items()}
 
     def _resolve_params_for_run(self, preset, rng: np.random.Generator):
         plugin = self.plugins[self.effect_id.get()]
         fixed = self._collect_fixed_params()
         ranges = (preset or {}).get("params", {})
-
-        jitter = max(0.0, float(self.jitter_pct.get())) / 100.0 if self.randomize.get() else 0.0
-        resolved = {}
-
+        out = {}
         for p in plugin.params:
             key = p["key"]
-            base = fixed.get(key, p.get("default"))
-            if not self.randomize.get():
-                resolved[key] = base
-                continue
-            spec = ranges.get(key, None)
-            resolved[key] = resolve_value(rng, spec, base, pdesc=p, jitter=jitter)
-
-        return resolved
+            spec = None if key in self.param_overrides else ranges.get(key)
+            out[key] = resolve_value(rng, spec, fixed.get(key, p.get("default")), pdesc=p)
+        return out
 
     def _make_outputs(self, preset_name: str, effect_id: str, w: int, h: int, fps: int, outdir: str, suffix: str = ""):
         prefix = self.file_prefix.get().strip() or "overlay"
         ts = _now_ts()
         base = f"{prefix}_{preset_name.replace(' ', '_')}_{effect_id}_{w}x{h}_{fps}fps_{ts}{suffix}"
-        mp4 = os.path.join(outdir, base + ".mp4")
-        thumb = os.path.join(outdir, base + "_thumb.png")
-        meta = os.path.join(outdir, base + ".json")
-        return mp4, thumb, meta
+        return os.path.join(outdir, base + ".mp4"), os.path.join(outdir, base + "_thumb.png"), os.path.join(outdir, base + ".json")
 
     def _show_cmd_preview(self):
         try:
-            outdir = self.output_dir.get().strip()
-            _ensure_dir(outdir)
+            outdir = self.output_dir.get().strip(); _ensure_dir(outdir)
             preset = self.presets.get(self.preset_name.get())
             preset_name = (preset or {}).get("name", "custom")
-            eff_id = self.effect_id.get()
-            w, h = int(self.w.get()), int(self.h.get())
-            fps = int(self.fps.get())
-
+            eff_id = self.effect_id.get(); w, h, fps = int(self.w.get()), int(self.h.get()), int(self.fps.get())
             mp4, _, _ = self._make_outputs(preset_name, eff_id, w, h, fps, outdir)
-            cmd = [
-                self.ffmpeg_path.get().strip(), "-y",
-                "-f", "rawvideo", "-pix_fmt", "rgb24",
-                "-s", f"{w}x{h}", "-r", str(fps), "-i", "-",
-                "-an",
-                "-c:v", self.encoder.get(),
-                "-preset", self.nv_preset.get(),
-                "-b:v", self.bitrate.get().strip(),
-                "-pix_fmt", "yuv420p",
-                "-movflags", "+faststart",
-                mp4
-            ]
+            cmd = [self.ffmpeg_path.get().strip(), "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "-", "-an", "-c:v", self.encoder.get(), "-preset", self.nv_preset.get(), "-b:v", self.bitrate.get().strip(), "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4]
             self._log("---- ffmpeg command (preview) ----")
-            self._log(" ".join([f"\"{c}\"" if " " in c else c for c in cmd]))
+            self._log(" ".join([f'"{c}"' if " " in c else c for c in cmd]))
             self._log("----------------------------------\n")
         except Exception as e:
             messagebox.showerror("エラー", str(e))
@@ -768,6 +1119,7 @@ class EffectFactoryApp(tk.Tk):
         self.btn_make.config(state=("disabled" if busy else "normal"))
         self.btn_preview.config(state=("disabled" if busy else "normal"))
         self.btn_gumroad_zip.config(state=("disabled" if busy else "normal"))
+        self._update_random_ui_state()
         if not busy:
             self.pbar["value"] = 0
 
@@ -782,36 +1134,12 @@ class EffectFactoryApp(tk.Tk):
 
     def create_gumroad_zip(self, mp4_path: str) -> str:
         if not mp4_path or not os.path.isfile(mp4_path):
-            raise FileNotFoundError("MP4が見つかりません。先に書き出ししてください")
-
+            raise FileNotFoundError("MP4 が見つかりません。先に本生成してください。")
         outdir = os.path.dirname(mp4_path)
         base = os.path.splitext(os.path.basename(mp4_path))[0]
         zip_path = os.path.join(outdir, f"{base}__gumroad.zip")
-
-        readme_text = self._template_or_default("README.txt", (
-            "Overlay Video Asset (MP4)\n\n"
-            "- This is a black-background overlay clip for compositing.\n"
-            "- Place it above your base footage and use blend mode: Screen / Add / Lighten.\n"
-            "- Adjust opacity to fit your scene.\n"
-            "- For looping: duplicate clips end-to-end.\n"
-            "- If a seam is visible, add a short crossfade at the boundary.\n\n"
-            "Included files in Gumroad ZIP:\n"
-            "- overlay.mp4\n"
-        ))
-        license_text = self._template_or_default("LICENSE.txt", (
-            "License (Overlay Asset)\n\n"
-            "Allowed:\n"
-            "- Personal and commercial use\n"
-            "- Editing and modification\n"
-            "- Unlimited projects\n"
-            "- Credit not required\n\n"
-            "Prohibited:\n"
-            "- Redistribution of the source files (MP4 / ZIP), whether free or paid\n"
-            "- Resale of the source files as-is or with minor changes\n"
-            "- Re-upload to stock/asset marketplaces\n"
-            "- Sublicensing of the source files\n"
-        ))
-
+        readme_text = self._template_or_default("README.txt", "Overlay Video Asset (MP4)\n")
+        license_text = self._template_or_default("LICENSE.txt", "License (Overlay Asset)\n")
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.write(mp4_path, arcname="overlay.mp4")
             zf.writestr("README.txt", readme_text)
@@ -821,11 +1149,11 @@ class EffectFactoryApp(tk.Tk):
     def _on_make_gumroad_zip(self):
         mp4_path = self.last_export_mp4
         if not mp4_path:
-            messagebox.showerror("エラー", "先に書き出ししてください")
+            messagebox.showerror("エラー", "先に本生成してください。")
             return
         try:
             zip_path = self.create_gumroad_zip(mp4_path)
-            messagebox.showinfo("完了", f"Gumroad用ZIPを作成しました\n{zip_path}")
+            messagebox.showinfo("完了", f"Gumroad 用 ZIP を作成しました\n{zip_path}")
             self._log(f"[GUMROAD] ZIP created: {zip_path}")
         except Exception as e:
             messagebox.showerror("エラー", str(e))
@@ -834,19 +1162,12 @@ class EffectFactoryApp(tk.Tk):
         if self.busy:
             return
         try:
-            outdir = self.output_dir.get().strip()
-            _ensure_dir(outdir)
-
+            outdir = self.output_dir.get().strip(); _ensure_dir(outdir)
             ffmpeg = self.ffmpeg_path.get().strip()
             if not ffmpeg:
-                raise ValueError("ffmpegが空です。")
-
-            # mark busy
-            self._set_busy(True)
-            self.pbar["value"] = 0
-
+                raise ValueError("ffmpeg を指定してください。")
+            self._set_busy(True); self.pbar["value"] = 0
             threading.Thread(target=self._worker_preview, daemon=True).start()
-
         except Exception as e:
             self._set_busy(False)
             messagebox.showerror("エラー", str(e))
@@ -855,135 +1176,71 @@ class EffectFactoryApp(tk.Tk):
         if self.busy:
             return
         try:
-            outdir = self.output_dir.get().strip()
-            _ensure_dir(outdir)
-
+            outdir = self.output_dir.get().strip(); _ensure_dir(outdir)
             ffmpeg = self.ffmpeg_path.get().strip()
             if not ffmpeg:
-                raise ValueError("ffmpegが空です。")
-
-            w, h = int(self.w.get()), int(self.h.get())
-            fps = int(self.fps.get())
-            duration = float(self.duration.get())
-            frames = int(round(fps * duration))
+                raise ValueError("ffmpeg を指定してください。")
+            frames = int(round(int(self.fps.get()) * float(self.duration.get())))
             if frames < 2:
-                raise ValueError("短すぎます。")
-
-            self._set_busy(True)
-            self.pbar["value"] = 0
-
+                raise ValueError("秒数が短すぎます。")
+            self._set_busy(True); self.pbar["value"] = 0
             threading.Thread(target=self._worker_generate, daemon=True).start()
-
         except Exception as e:
             self._set_busy(False)
             messagebox.showerror("エラー", str(e))
 
-    def _reserve_variant_seed(self, outdir: str) -> int:
-        """Reserve a variant seed for preview/live so the next final render can match it."""
-        if not self.randomize.get():
-            self.locked_variant_seed = None
-            self.locked_variant_mode = None
-            return 0
-
-        mode = self.variant_mode.get()
-
-        # If mode changed, re-reserve
-        if self.locked_variant_mode is not None and self.locked_variant_mode != mode:
-            self.locked_variant_seed = None
-            self.locked_variant_mode = None
-
-        if self.locked_variant_seed is None:
-            if mode == "timestamp":
-                self.locked_variant_seed = int(time.time_ns() & 0x7FFFFFFF)
-            elif mode == "random":
-                self.locked_variant_seed = int.from_bytes(os.urandom(4), "big") & 0x7FFFFFFF
-            else:
-                # counter: do not advance state yet
-                self.locked_variant_seed = self._peek_next_counter(outdir)
-            self.locked_variant_mode = mode
-
-        return int(self.locked_variant_seed)
-
-    def _calc_seed_and_params(self, outdir: str, w: int, h: int, fps: int, frames: int, preset_name: str, eff_id: str, preset, advance_state: bool):
+    def _calc_seed_and_params(self, variant: int, preset_name: str, eff_id: str, preset):
         base_seed = int(self.base_seed.get())
-
-        if not advance_state:
-            # preview/live path: always use reserved seed (stable look)
-            variant_seed = self._reserve_variant_seed(outdir)
-        else:
-            # final path: consume reserved seed if present, otherwise advance state normally
-            if self.randomize.get():
-                if self.locked_variant_seed is not None:
-                    variant_seed = int(self.locked_variant_seed)
-                    if self.variant_mode.get() == "counter":
-                        self._commit_counter(outdir, variant_seed)
-                    self.locked_variant_seed = None
-                    self.locked_variant_mode = None
-                else:
-                    variant_seed = self._next_variant_seed(outdir, advance_state=True)
-            else:
-                variant_seed = 0
-
-        # "scene_seed": keeps look consistent between preview and final (resolution independent)
-        scene_seed = _hash_seed(base_seed, variant_seed, preset_name, eff_id, bool(self.loop_mode.get()))
-
-        # Resolve params from scene_seed so preview/final share the same style/choices
-        rng = np.random.default_rng(scene_seed)
-        params = self._resolve_params_for_run(preset, rng)
-
-        # "render_seed": per-resolution deterministic seed
-        render_seed = _hash_seed(scene_seed, w, h, fps, frames)
-
-        # Reserved keys for v2 features (plugins can read these)
-        params = dict(params)
-        params["__loop__"] = bool(self.loop_mode.get())
-        params["__frames__"] = int(frames)
-        params["__fps__"] = int(fps)
-
-        return base_seed, variant_seed, scene_seed, render_seed, params
-
-
-    # -------------------------
-    # Live preview (continuous)
-    # -------------------------
+        out_w, out_h = int(self.w.get()), int(self.h.get())
+        out_fps = int(self.fps.get())
+        out_frames = max(2, int(round(out_fps * float(self.duration.get()))))
+        params_seed = _hash_seed(base_seed, int(variant), preset_name, eff_id, "params")
+        rng = np.random.default_rng(params_seed)
+        resolved_params = self._resolve_params_for_run(preset, rng)
+        param_blob = json.dumps(resolved_params, sort_keys=True, ensure_ascii=True)
+        final_seed = _hash_seed(base_seed, int(variant), preset_name, eff_id, out_w, out_h, out_fps, out_frames, param_blob)
+        runtime = dict(resolved_params)
+        runtime["__loop__"] = bool(self.loop_mode.get())
+        runtime["__frames__"] = int(out_frames)
+        runtime["__fps__"] = int(out_fps)
+        return base_seed, int(variant), int(final_seed), resolved_params, runtime
 
     def _setup_live_preview_traces(self):
         if getattr(self, "_live_traces_set", False):
             return
         self._live_traces_set = True
-
         def hook(var):
             try:
-                var.trace_add("write", lambda *_: self._request_preview_rebuild())
+                var.trace_add("write", lambda *_: self._on_ui_value_changed())
             except Exception:
                 pass
-
-        # Core controls that change look
-        for v in [self.preset_name, self.effect_id, self.w, self.h, self.fps, self.loop_mode,
-                  self.randomize, self.base_seed, self.variant_mode, self.jitter_pct]:
+        for v in [self.preset_name, self.effect_id, self.w, self.h, self.fps, self.duration, self.loop_mode, self.base_seed, self.live_preview, self.live_preview_fps, self.live_preview_scale, self.live_preview_seconds]:
             hook(v)
+        self.output_dir.trace_add("write", lambda *_: (self._sync_variant_from_state(force=True), self._update_random_ui_state(), self._request_preview_rebuild(immediate=True)))
 
-        # Live preview controls
-        for v in [self.live_preview, self.live_preview_fps, self.live_preview_scale, self.live_preview_seconds]:
-            hook(v)
+    def _set_preview_loading(self, loading: bool, text: str = None):
+        if text:
+            self.preview_status.set(text)
+        if loading:
+            self.preview_overlay.lift()
+        else:
+            self.preview_overlay.lower()
 
     def _request_preview_rebuild(self, immediate: bool = False):
-        """Debounced rebuild request. Must be called from Tk thread."""
         if self._preview_stop_evt.is_set():
             return
-
+        if not self.preview_auto_refresh.get() and not immediate:
+            return
         if self._preview_rebuild_after_id is not None:
             try:
                 self.after_cancel(self._preview_rebuild_after_id)
             except Exception:
                 pass
-            self._preview_rebuild_after_id = None
-
+        self._set_preview_loading(True, "プレビュー更新中...")
         if immediate:
             self._preview_take_snapshot_and_signal()
         else:
-            # Debounce: parameter dragging/spin updates
-            self._preview_rebuild_after_id = self.after(180, self._preview_take_snapshot_and_signal)
+            self._preview_rebuild_after_id = self.after(220, self._preview_take_snapshot_and_signal)
 
     def _preview_take_snapshot_and_signal(self):
         self._preview_rebuild_after_id = None
@@ -993,92 +1250,46 @@ class EffectFactoryApp(tk.Tk):
                 self._preview_settings = snap
             self._preview_rebuild_evt.set()
         except Exception as e:
-            # keep UI alive even if preview fails
             self.msgq.put(("log", f"[LIVEPREVIEW] snapshot error: {e}"))
 
     def _take_preview_snapshot(self):
-        outdir = self.output_dir.get().strip()
-        _ensure_dir(outdir)
-
+        outdir = self.output_dir.get().strip(); _ensure_dir(outdir)
+        self._sync_variant_from_state()
         preset = self.presets.get(self.preset_name.get())
         preset_name = (preset or {}).get("name", "custom")
-        eff_id = self.effect_id.get()
-        plugin = self.plugins[eff_id]
-
-        # live preview resolution
+        eff_id = self.effect_id.get(); plugin = self.plugins[eff_id]
         scale = float(self.live_preview_scale.get())
         w0, h0 = int(self.w.get()), int(self.h.get())
-        w = max(160, int(round(w0 * scale / 16) * 16))
-        h = max(160, int(round(h0 * scale / 16) * 16))
-
-        fps = int(self.live_preview_fps.get())
-        seconds = float(self.live_preview_seconds.get())
+        w = max(160, int(round(w0 * scale / 16) * 16)); h = max(160, int(round(h0 * scale / 16) * 16))
+        fps = int(self.live_preview_fps.get()); seconds = float(self.live_preview_seconds.get())
         frames = max(2, int(round(fps * seconds)))
-
-        base_seed, variant_seed, scene_seed, render_seed, params = self._calc_seed_and_params(
-            outdir=outdir, w=w, h=h, fps=fps, frames=frames,
-            preset_name=preset_name, eff_id=eff_id, preset=preset,
-            advance_state=False
-        )
-
-        # Update seed label (on main thread via msg queue)
-        self.msgq.put(("preview_seed", f"seed: base={base_seed} variant={variant_seed} scene={scene_seed}"))
-
-        return {
-            "enabled": bool(self.live_preview.get()),
-            "preset_name": preset_name,
-            "eff_id": eff_id,
-            "plugin": plugin,
-            "w": w, "h": h, "fps": fps, "frames": frames,
-            "render_seed": render_seed,
-            "params": params,
-        }
+        variant = 1 if not self.randomize.get() else int(self.variant.get())
+        base_seed, variant, final_seed, resolved_params, runtime = self._calc_seed_and_params(variant=variant, preset_name=preset_name, eff_id=eff_id, preset=preset)
+        self.final_seed.set(int(final_seed)); self._update_random_ui_state()
+        return {"enabled": bool(self.live_preview.get()), "preset_name": preset_name, "eff_id": eff_id, "plugin": plugin, "w": w, "h": h, "fps": fps, "frames": frames, "base_seed": base_seed, "variant": variant, "final_seed": final_seed, "resolved_params": resolved_params, "params": runtime}
 
     def _next_preview_variant(self):
-        """Pick next look for live preview (does not write state until final render)."""
         try:
-            outdir = self.output_dir.get().strip()
-            _ensure_dir(outdir)
-
+            outdir = self.output_dir.get().strip(); _ensure_dir(outdir)
+            self._sync_variant_from_state()
             if not self.randomize.get():
-                self.msgq.put(("log", "[LIVEPREVIEW] 毎回ランダム化する がOFFなので、見た目は固定です。"))
+                self.msgq.put(("log", "[RANDOM] OFF 中はバリエーション送りできません。"))
                 return
-
-            mode = self.variant_mode.get()
-            current = self._reserve_variant_seed(outdir)
-
-            if mode == "counter":
-                self.locked_variant_seed = int(current) + 1
-            elif mode == "timestamp":
-                self.locked_variant_seed = int(time.time_ns() & 0x7FFFFFFF)
-            else:
-                self.locked_variant_seed = int.from_bytes(os.urandom(4), "big") & 0x7FFFFFFF
-
-            self.locked_variant_mode = mode
+            self._push_history("random")
+            self._set_variant(int(self.variant.get()) + 1, persist=True)
+            self._update_random_ui_state()
+            self._schedule_history("random")
             self._request_preview_rebuild(immediate=True)
-
         except Exception as e:
             self.msgq.put(("err", str(e)))
 
     def _preview_worker(self):
-        """Background thread: renders low-res frames continuously."""
-        cache = None
-        plugin = None
-        fps = 15
-        frames = 60
-        frame_i = 0
-        enabled = True
-
-        last = time.perf_counter()
-
+        cache = None; plugin = None; fps = 15; frames = 60; frame_i = 0; last = time.perf_counter()
         while not self._preview_stop_evt.is_set():
             try:
-                # Auto-pause while encoding / tasks are running
-                # Auto-pause while encoding / tasks are running
                 if self.busy:
                     time.sleep(0.03)
                     continue
-
                 if self._preview_rebuild_evt.is_set() or cache is None or plugin is None:
                     self._preview_rebuild_evt.clear()
                     with self._preview_settings_lock:
@@ -1086,34 +1297,14 @@ class EffectFactoryApp(tk.Tk):
                     if not snap:
                         time.sleep(0.03)
                         continue
-
-                    enabled = bool(snap.get("enabled", True))
-                    if not enabled:
-                        # Preview is OFF
-                        time.sleep(0.03)
-                        cache = None
-                        plugin = None
+                    if not bool(snap.get("enabled", True)):
+                        time.sleep(0.03); cache = None; plugin = None
                         continue
-
-                    plugin = snap["plugin"]
-                    fps = int(snap["fps"])
-                    frames = int(snap["frames"])
-                    frame_i = 0
-
-                    cache = plugin.build_cache(
-                        w=int(snap["w"]),
-                        h=int(snap["h"]),
-                        frames=frames,
-                        seed=int(snap["render_seed"]),
-                        params=snap["params"]
-                    )
-
-                # Render next frame
-                i = frame_i % frames
-                img = plugin.render_frame(cache, i)  # PIL RGB
+                    plugin = snap["plugin"]; fps = int(snap["fps"]); frames = int(snap["frames"]); frame_i = 0
+                    cache = plugin.build_cache(w=int(snap["w"]), h=int(snap["h"]), frames=frames, seed=int(snap["final_seed"]), params=snap["params"])
+                    self.msgq.put(("preview_state", {"loading": True, "text": "低解像度で更新中..."}))
+                img = plugin.render_frame(cache, frame_i % frames)
                 frame_i += 1
-
-                # Replace old frame (keep latest only)
                 try:
                     while True:
                         self._preview_frame_q.get_nowait()
@@ -1123,23 +1314,19 @@ class EffectFactoryApp(tk.Tk):
                     self._preview_frame_q.put_nowait(img)
                 except Exception:
                     pass
-
-                # Throttle
-                now = time.perf_counter()
-                dt = now - last
-                target = 1.0 / max(1, fps)
-                if dt < target:
-                    time.sleep(target - dt)
+                if frame_i <= 2:
+                    self.msgq.put(("preview_state", {"loading": False, "text": "プレビュー更新完了"}))
+                now = time.perf_counter(); target = 1.0 / max(1, fps)
+                if now - last < target:
+                    time.sleep(target - (now - last))
                 last = time.perf_counter()
-
             except Exception as e:
-                cache = None
-                plugin = None
+                cache = None; plugin = None
                 self.msgq.put(("log", f"[LIVEPREVIEW] render error: {e}"))
+                self.msgq.put(("preview_state", {"loading": False, "text": "プレビュー更新失敗"}))
                 time.sleep(0.2)
 
     def _preview_ui_tick(self):
-        """Tk thread: paints the latest preview frame."""
         try:
             img = None
             try:
@@ -1147,11 +1334,9 @@ class EffectFactoryApp(tk.Tk):
                     img = self._preview_frame_q.get_nowait()
             except queue.Empty:
                 pass
-
             if img is not None:
                 self._preview_photo = ImageTk.PhotoImage(img)
-                self.preview_label.configure(image=self._preview_photo)
-
+                self.preview_label.configure(image=self._preview_photo, text="")
         finally:
             if not self._preview_stop_evt.is_set():
                 self.after(33, self._preview_ui_tick)
@@ -1168,96 +1353,44 @@ class EffectFactoryApp(tk.Tk):
             outdir = self.output_dir.get().strip()
             preset = self.presets.get(self.preset_name.get())
             preset_name = (preset or {}).get("name", "custom")
-            eff_id = self.effect_id.get()
-            plugin = self.plugins[eff_id]
-
-            # preview size
+            eff_id = self.effect_id.get(); plugin = self.plugins[eff_id]
             scale = float(self.preview_scale.get())
             w0, h0 = int(self.w.get()), int(self.h.get())
-            w = max(160, int(round(w0 * scale / 16) * 16))
-            h = max(160, int(round(h0 * scale / 16) * 16))
-
-            fps = int(self.fps.get())
-            duration = min(float(self.preview_seconds.get()), float(self.duration.get()))
-            frames = int(round(fps * duration))
-            if frames < 2:
-                frames = 2
-
-            base_seed, variant_seed, scene_seed, render_seed, params = self._calc_seed_and_params(
-                outdir=outdir, w=w, h=h, fps=fps, frames=frames,
-                preset_name=preset_name, eff_id=eff_id, preset=preset,
-                advance_state=False
-            )
-
-            preview_dir = os.path.join(outdir, "_preview")
-            _ensure_dir(preview_dir)
+            w = max(160, int(round(w0 * scale / 16) * 16)); h = max(160, int(round(h0 * scale / 16) * 16))
+            fps = int(self.fps.get()); duration = min(float(self.preview_seconds.get()), float(self.duration.get()))
+            frames = max(2, int(round(fps * duration)))
+            variant = 1 if not self.randomize.get() else int(self.variant.get())
+            base_seed, variant, final_seed, resolved_params, runtime = self._calc_seed_and_params(variant=variant, preset_name=preset_name, eff_id=eff_id, preset=preset)
+            preview_dir = os.path.join(outdir, "_preview"); _ensure_dir(preview_dir)
             mp4, thumb, meta = self._make_outputs(preset_name, eff_id, w, h, fps, preview_dir, suffix="_preview")
-
             self.msgq.put(("log", f"[PREVIEW] 生成開始: preset={preset_name} effect={eff_id}"))
-            self.msgq.put(("log", f"[PREVIEW] seed: base={base_seed} variant(reserved)={variant_seed} scene={scene_seed} render={render_seed}"))
-            self.msgq.put(("log", f"[PREVIEW] params: {params}"))
-
-            cache = plugin.build_cache(w=w, h=h, frames=frames, seed=render_seed, params=params)
-
-            p, cmd = _ffmpeg_pipe_raw_rgb(
-                ffmpeg_path=self.ffmpeg_path.get().strip(),
-                w=w, h=h, fps=fps,
-                out_mp4=mp4,
-                encoder=self.encoder.get(),
-                nv_preset=self.nv_preset.get(),
-                bitrate="6M"
-            )
-            self.msgq.put(("log", "[PREVIEW] FFmpeg: " + " ".join([f"\"{c}\"" if " " in c else c for c in cmd])))
-
+            self.msgq.put(("log", f"[PREVIEW] seed: base={base_seed} variant={variant} final={final_seed}"))
+            self.msgq.put(("log", f"[PREVIEW] params: {resolved_params}"))
+            cache = plugin.build_cache(w=w, h=h, frames=frames, seed=final_seed, params=runtime)
+            p, cmd = _ffmpeg_pipe_raw_rgb(self.ffmpeg_path.get().strip(), w, h, fps, mp4, self.encoder.get(), self.nv_preset.get(), "6M")
+            self.msgq.put(("log", "[PREVIEW] FFmpeg: " + " ".join([f'\"{c}\"' if " " in c else c for c in cmd])))
             first_img = None
             for i in range(frames):
-                img = plugin.render_frame(cache, i)  # PIL RGB
+                img = plugin.render_frame(cache, i)
                 if first_img is None:
                     first_img = img.copy()
                 p.stdin.write(img.tobytes())
                 if i % max(1, frames // 100) == 0:
                     self.msgq.put(("progress", int(i * 100 / frames)))
-
-            p.stdin.close()
-            out = p.stdout.read().decode("utf-8", errors="ignore") if p.stdout else ""
-            ret = p.wait()
+            p.stdin.close(); out = p.stdout.read().decode("utf-8", errors="ignore") if p.stdout else ""; ret = p.wait()
             if ret != 0:
-                raise RuntimeError(f"ffmpeg失敗 (code={ret})\n{out[-1200:]}")
-
+                raise RuntimeError(f"ffmpeg 失敗 (code={ret})\n{out[-1200:]}")
             if first_img is not None:
                 first_img.save(thumb)
-
-            meta_obj = {
-                "name": preset_name,
-                "effect_id": eff_id,
-                "effect_name": plugin.name,
-                "preview": True,
-                "output": {
-                    "w": w, "h": h, "fps": fps, "duration": duration, "frames": frames,
-                    "encoder": self.encoder.get(),
-                    "nv_preset": self.nv_preset.get(),
-                    "bitrate": "6M",
-                },
-                "random": {
-                    "randomize": bool(self.randomize.get()),
-                    "base_seed": base_seed,
-                    "variant_seed_reserved": variant_seed,
-                    "variant_mode": self.variant_mode.get(),
-                    "scene_seed": scene_seed,
-                    "render_seed": render_seed,
-                    "jitter_pct": float(self.jitter_pct.get()),
-                    "loop_mode": bool(self.loop_mode.get()),
-                },
-                "params": params,
-                "outputs": {"mp4": mp4, "thumb": thumb},
-                "created": _now_ts(),
-                "note": "Preview MP4. Next final render will reuse the reserved variant_seed (if you render next)."
-            }
-            _write_json(meta, meta_obj)
-
-            self.msgq.put(("log", f"[PREVIEW] ✅ 完了: {mp4}"))
-            self.msgq.put(("done", f"プレビュー生成完了:\n{mp4}"))
-
+            _write_json(meta, {
+                "preset_name": preset_name, "effect_id": eff_id, "effect_name": plugin.name, "preview": True,
+                "output": {"w": w, "h": h, "fps": fps, "duration": duration, "frames": frames, "encoder": self.encoder.get(), "nv_preset": self.nv_preset.get(), "bitrate": "6M"},
+                "random": {"base_seed": base_seed, "variant": variant, "final_seed": final_seed},
+                "params": resolved_params, "outputs": {"mp4": mp4, "thumb": thumb}, "created": _now_ts(), "note": "Preview MP4"
+            })
+            self.msgq.put(("sync_random_ui", {"variant": variant, "final_seed": final_seed}))
+            self.msgq.put(("log", f"[PREVIEW] 完了: {mp4}"))
+            self.msgq.put(("done", f"プレビュー生成完了\n{mp4}"))
         except Exception as e:
             self.msgq.put(("err", str(e)))
 
@@ -1266,92 +1399,41 @@ class EffectFactoryApp(tk.Tk):
             outdir = self.output_dir.get().strip()
             preset = self.presets.get(self.preset_name.get())
             preset_name = (preset or {}).get("name", "custom")
-            eff_id = self.effect_id.get()
-            plugin = self.plugins[eff_id]
-
-            w, h = int(self.w.get()), int(self.h.get())
-            fps = int(self.fps.get())
-            duration = float(self.duration.get())
+            eff_id = self.effect_id.get(); plugin = self.plugins[eff_id]
+            w, h = int(self.w.get()), int(self.h.get()); fps = int(self.fps.get()); duration = float(self.duration.get())
             frames = int(round(fps * duration))
             if frames < 2:
-                raise ValueError("短すぎます。")
-
-            base_seed, variant_seed, scene_seed, render_seed, params = self._calc_seed_and_params(
-                outdir=outdir, w=w, h=h, fps=fps, frames=frames,
-                preset_name=preset_name, eff_id=eff_id, preset=preset,
-                advance_state=True
-            )
-
-            mp4, thumb, meta = self._make_outputs(preset_name, eff_id, w, h, fps, outdir)
-
+                raise ValueError("秒数が短すぎます。")
+            variant = 1 if not self.randomize.get() else int(self.variant.get())
+            base_seed, variant, final_seed, resolved_params, runtime = self._calc_seed_and_params(variant=variant, preset_name=preset_name, eff_id=eff_id, preset=preset)
+            mp4, _, meta = self._make_outputs(preset_name, eff_id, w, h, fps, outdir)
             self.msgq.put(("log", f"生成開始: preset={preset_name} effect={eff_id}"))
-            self.msgq.put(("log", f"seed: base={base_seed} variant={variant_seed} scene={scene_seed} render={render_seed} mode={self.variant_mode.get()} randomize={self.randomize.get()} loop={self.loop_mode.get()}"))
-            self.msgq.put(("log", f"params: {params}"))
-
-            cache = plugin.build_cache(w=w, h=h, frames=frames, seed=render_seed, params=params)
-
-            p, cmd = _ffmpeg_pipe_raw_rgb(
-                ffmpeg_path=self.ffmpeg_path.get().strip(),
-                w=w, h=h, fps=fps,
-                out_mp4=mp4,
-                encoder=self.encoder.get(),
-                nv_preset=self.nv_preset.get(),
-                bitrate=self.bitrate.get().strip() or "12M"
-            )
-            self.msgq.put(("log", "FFmpeg: " + " ".join([f"\"{c}\"" if " " in c else c for c in cmd])))
-
-            first_img = None
+            self.msgq.put(("log", f"seed: base={base_seed} variant={variant} final={final_seed} randomize={self.randomize.get()}"))
+            self.msgq.put(("log", f"params: {resolved_params}"))
+            cache = plugin.build_cache(w=w, h=h, frames=frames, seed=final_seed, params=runtime)
+            p, cmd = _ffmpeg_pipe_raw_rgb(self.ffmpeg_path.get().strip(), w, h, fps, mp4, self.encoder.get(), self.nv_preset.get(), self.bitrate.get().strip() or "12M")
+            self.msgq.put(("log", "FFmpeg: " + " ".join([f'\"{c}\"' if " " in c else c for c in cmd])))
             for i in range(frames):
-                img = plugin.render_frame(cache, i)  # PIL RGB
-                if first_img is None:
-                    first_img = img.copy()
-
+                img = plugin.render_frame(cache, i)
                 p.stdin.write(img.tobytes())
-
                 if i % max(1, frames // 100) == 0:
                     self.msgq.put(("progress", int(i * 100 / frames)))
-
-            p.stdin.close()
-            out = p.stdout.read().decode("utf-8", errors="ignore") if p.stdout else ""
-            ret = p.wait()
+            p.stdin.close(); out = p.stdout.read().decode("utf-8", errors="ignore") if p.stdout else ""; ret = p.wait()
             if ret != 0:
-                raise RuntimeError(f"ffmpeg失敗 (code={ret})\n{out[-1200:]}")
-
-            if first_img is not None:
-                first_img.save(thumb)
-
-            meta_obj = {
-                "name": preset_name,
-                "effect_id": eff_id,
-                "effect_name": plugin.name,
-                "output": {
-                    "w": w, "h": h, "fps": fps, "duration": duration, "frames": frames,
-                    "encoder": self.encoder.get(),
-                    "nv_preset": self.nv_preset.get(),
-                    "bitrate": self.bitrate.get().strip(),
-                },
-                "random": {
-                    "randomize": bool(self.randomize.get()),
-                    "base_seed": base_seed,
-                    "variant_seed": variant_seed,
-                    "variant_mode": self.variant_mode.get(),
-                    "scene_seed": scene_seed,
-                    "render_seed": render_seed,
-                    "jitter_pct": float(self.jitter_pct.get()),
-                    "loop_mode": bool(self.loop_mode.get()),
-                },
-                "params": params,
-                "outputs": {"mp4": mp4, "thumb": thumb},
-                "created": _now_ts(),
-                "note": "Black background overlay. Use Screen/Add blend in PV editor."
-            }
-            _write_json(meta, meta_obj)
+                raise RuntimeError(f"ffmpeg 失敗 (code={ret})\n{out[-1200:]}")
+            _write_json(meta, {
+                "preset_name": preset_name, "effect_id": eff_id, "effect_name": plugin.name,
+                "output": {"w": w, "h": h, "fps": fps, "duration": duration, "frames": frames, "encoder": self.encoder.get(), "nv_preset": self.nv_preset.get(), "bitrate": self.bitrate.get().strip()},
+                "random": {"base_seed": base_seed, "variant": variant, "final_seed": final_seed},
+                "params": resolved_params, "outputs": {"mp4": mp4}, "created": _now_ts(), "note": "Black background overlay. Use Screen/Add blend in PV editor."
+            })
             self.last_export_mp4 = mp4
-
-            self.msgq.put(("log", f"✅ 完了: {mp4}"))
+            self.msgq.put(("sync_random_ui", {"variant": variant, "final_seed": final_seed}))
+            if self.randomize.get():
+                self.msgq.put(("advance_variant", int(variant) + 1))
+            self.msgq.put(("log", f"完了: {mp4}"))
             self.msgq.put(("log", f"   meta: {meta}"))
-            self.msgq.put(("done", f"生成完了:\n{mp4}"))
-
+            self.msgq.put(("done", f"本生成完了\n{mp4}"))
         except Exception as e:
             self.msgq.put(("err", str(e)))
 
@@ -1366,17 +1448,32 @@ class EffectFactoryApp(tk.Tk):
                 elif kind == "done":
                     self._set_busy(False)
                     messagebox.showinfo("完了", str(payload))
-                elif kind == "preview_seed":
+                elif kind == "sync_random_ui":
+                    if isinstance(payload, dict):
+                        if "variant" in payload:
+                            self._set_variant(int(payload["variant"]), persist=False)
+                        if "final_seed" in payload:
+                            self.final_seed.set(int(payload["final_seed"]))
+                        self._update_random_ui_state()
+                elif kind == "advance_variant":
                     try:
-                        self.live_seed_text.set(str(payload))
+                        nv = int(payload)
+                        self._set_variant(nv, persist=True)
+                        self.final_seed.set(0)
+                        self._update_random_ui_state()
+                        self._request_preview_rebuild(immediate=True)
                     except Exception:
                         pass
+                elif kind == "preview_state":
+                    self._set_preview_loading(bool(payload.get("loading")), payload.get("text"))
                 elif kind == "err":
                     self._set_busy(False)
+                    self._set_preview_loading(False, "プレビュー待機中")
                     messagebox.showerror("エラー", payload)
         except queue.Empty:
             pass
         self.after(120, self._drain_msgs)
+
 
 if __name__ == "__main__":
     app = EffectFactoryApp()

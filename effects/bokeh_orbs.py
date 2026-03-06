@@ -1,4 +1,4 @@
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
 import numpy as np
 import os, sys
 sys.path.append(os.path.dirname(__file__))
@@ -44,12 +44,16 @@ def build_cache(w, h, frames, seed, params):
         "w": w, "h": h, "frames": frames,
         "seed": int(seed),
         "__loop__": loop,
+        "__fps__": int(params.get("__fps__", 30)),
+        "__frames__": int(params.get("__frames__", frames)),
         "orbs": orbs,
         "tint": (tint_r, tint_g, tint_b),
         "glow_radius": float(params.get("glow_radius", 8.0)),
         "glow_strength": float(params.get("glow_strength", 0.7)),
         "chromatic": int(params.get("chromatic", 1)),
         "grain": float(params.get("grain", 0.04)),
+        "brightness": float(params.get("brightness", 1.0)),
+        "speed": float(params.get("speed", 1.0)),
         "blur": float(params.get("blur", 1.5)),
     }
     return cache
@@ -57,8 +61,21 @@ def build_cache(w, h, frames, seed, params):
 def render_frame(cache, i):
     w, h, frames = cache["w"], cache["h"], cache["frames"]
     loop = bool(cache.get("__loop__", False))
-    denom = (frames - 1) if (loop and frames > 1) else frames
-    t = (i / float(denom)) if denom > 0 else 0.0
+    fps = max(1, int(cache.get("__fps__", 30)))
+    n = max(1, int(cache.get("__frames__", frames)))
+    t_sec = i / float(fps)
+    u = (i / float(max(1, n - 1))) if n > 1 else 0.0
+    duration_sec = max(1.0 / fps, (n - 1) / float(fps))
+    speed = max(0.0, float(cache.get("speed", 1.0)))
+
+    def phase_from_rate(rate_hz):
+        scaled_rate = rate_hz * speed
+        if loop:
+            if abs(scaled_rate) < 1e-9:
+                return 0.0
+            cycles = max(1, int(round(abs(scaled_rate) * duration_sec)))
+            return np.copysign(u * cycles, scaled_rate)
+        return scaled_rate * t_sec
 
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     dr = ImageDraw.Draw(img)
@@ -66,16 +83,14 @@ def render_frame(cache, i):
     tr, tg, tb = cache["tint"]
 
     for (x0, y0, kx, ky, r, alpha, ring, ff, fp, z) in cache["orbs"]:
-        # loop drift (integer cycles => seamless)
-        x = (x0 + (kx * w) * t) % w
-        y = (y0 + (ky * h) * t) % h
+        x = (x0 + w * phase_from_rate(kx)) % w
+        y = (y0 + h * phase_from_rate(ky)) % h
 
-        # slight breathing (integer freq)
-        breathe = 1.0 + 0.06 * np.sin(2*np.pi*(ff*t) + fp)
+        p_flicker = phase_from_rate(ff)
+        breathe = 1.0 + 0.06 * np.sin(2*np.pi*p_flicker + fp)
         rr = r * breathe
 
-        # flicker
-        a = alpha * (0.7 + 0.3 * np.sin(2*np.pi*(ff*t) + fp) + 0.3)
+        a = alpha * (0.7 + 0.3 * np.sin(2*np.pi*p_flicker + fp) + 0.3)
 
         # color (subtle warm/cool variation)
         warm = 0.85 + 0.35 * z
@@ -108,26 +123,32 @@ def render_frame(cache, i):
     if cache["grain"] > 0:
         out = film_grain(out, amount=float(cache["grain"]), seed=cache["seed"] + i * 31)
 
+    if cache["brightness"] != 1.0:
+        out = ImageEnhance.Brightness(out).enhance(float(cache["brightness"]))
+
     return out
 
 EFFECT = {
     "id": "bokeh_orbs",
-    "name": "Bokeh Orbs（ボケ玉/空気感/映画風）",
+    "name": "Bokeh Orbs",
     "params": [
-        {"key": "count", "label": "数", "type": "int", "default": 45, "min": 8, "max": 140, "step": 1},
-        {"key": "size_min", "label": "最小サイズ", "type": "float", "default": 24, "min": 6, "max": 120, "step": 2},
-        {"key": "size_max", "label": "最大サイズ", "type": "float", "default": 140, "min": 20, "max": 420, "step": 5},
-        {"key": "blur", "label": "ぼけ(ソフト)", "type": "float", "default": 1.5, "min": 0.0, "max": 6.0, "step": 0.2},
-        {"key": "glow_radius", "label": "グロー半径", "type": "float", "default": 8.0, "min": 0.0, "max": 20.0, "step": 0.5},
-        {"key": "glow_strength", "label": "グロー強度", "type": "float", "default": 0.7, "min": 0.0, "max": 2.0, "step": 0.05},
-        {"key": "chromatic", "label": "色収差(px)", "type": "int", "default": 1, "min": 0, "max": 8, "step": 1},
-        {"key": "grain", "label": "グレイン", "type": "float", "default": 0.04, "min": 0.0, "max": 0.25, "step": 0.01},
-        {"key": "drift_x_cycles", "label": "横ドリフト(周回)", "type": "int", "default": 1, "min": 0, "max": 4, "step": 1},
-        {"key": "drift_y_cycles", "label": "縦ドリフト(周回)", "type": "int", "default": 0, "min": 0, "max": 4, "step": 1},
-        {"key": "tint_r", "label": "色味R", "type": "float", "default": 0.95, "min": 0.6, "max": 1.4, "step": 0.02},
-        {"key": "tint_g", "label": "色味G", "type": "float", "default": 0.98, "min": 0.6, "max": 1.4, "step": 0.02},
-        {"key": "tint_b", "label": "色味B", "type": "float", "default": 1.05, "min": 0.6, "max": 1.6, "step": 0.02},
+        {"key": "count", "label": "Count", "type": "int", "default": 45, "min": 8, "max": 140, "step": 1},
+        {"key": "size_min", "label": "Min Size", "type": "float", "default": 24, "min": 6, "max": 120, "step": 2},
+        {"key": "size_max", "label": "Max Size", "type": "float", "default": 140, "min": 20, "max": 420, "step": 5},
+        {"key": "blur", "label": "Blur (Soft)", "type": "float", "default": 1.5, "min": 0.0, "max": 6.0, "step": 0.2},
+        {"key": "glow_radius", "label": "Glow Radius", "type": "float", "default": 8.0, "min": 0.0, "max": 20.0, "step": 0.5},
+        {"key": "glow_strength", "label": "Glow Strength", "type": "float", "default": 0.7, "min": 0.0, "max": 2.0, "step": 0.05},
+        {"key": "chromatic", "label": "Chromatic Shift (px)", "type": "int", "default": 1, "min": 0, "max": 8, "step": 1},
+        {"key": "grain", "label": "Grain", "type": "float", "default": 0.04, "min": 0.0, "max": 0.25, "step": 0.01},
+        {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 8.0, "step": 0.05},
+        {"key": "speed", "label": "Speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05},
+        {"key": "drift_x_cycles", "label": "Drift X Cycles", "type": "int", "default": 1, "min": 0, "max": 4, "step": 1},
+        {"key": "drift_y_cycles", "label": "Drift Y Cycles", "type": "int", "default": 0, "min": 0, "max": 4, "step": 1},
+        {"key": "tint_r", "label": "Tint R", "type": "float", "default": 0.95, "min": 0.6, "max": 1.4, "step": 0.02},
+        {"key": "tint_g", "label": "Tint G", "type": "float", "default": 0.98, "min": 0.6, "max": 1.4, "step": 0.02},
+        {"key": "tint_b", "label": "Tint B", "type": "float", "default": 1.05, "min": 0.6, "max": 1.6, "step": 0.02},
     ],
     "build_cache": build_cache,
     "render_frame": render_frame,
 }
+

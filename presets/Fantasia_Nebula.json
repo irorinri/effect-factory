@@ -12,8 +12,7 @@
     "bitrate": "14M"
   },
   "random": {
-    "base_seed": 56789,
-    "variant_mode": "counter"
+    "base_seed": 56789
   },
   "params": {
     "density": [

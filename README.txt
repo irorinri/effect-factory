@@ -15,7 +15,7 @@ EffectFactory v2 (黒背景オーバーレイ素材 生成アプリ)
   - *.mp4 : 黒背景素材（PV側で Screen/Add 合成）
   - *_thumb.png : 先頭フレームのサムネ
   - *.json : 生成条件と seed 記録（再現用）
-  - _state.json : counter方式の連番seed管理（出力フォルダ直下）
+  - _state.json : variant連番管理（出力フォルダ直下）
   - _preview/ : プレビュー出力フォルダ（低解像度・短尺）
 
 v2 の追加点:

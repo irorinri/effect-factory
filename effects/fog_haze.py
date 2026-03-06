@@ -38,23 +38,40 @@ def build_cache(w, h, frames, seed, params):
     return {
         "w": w, "h": h, "frames": frames,
         "__loop__": loop,
+        "__fps__": int(params.get("__fps__", 30)),
+        "__frames__": int(params.get("__frames__", frames)),
         "seed": int(seed),
         "fog": fog_img,
         "dx": dx, "dy": dy,
         "contrast": contrast,
         "glow": float(params.get("glow", 0.35)),
         "grain": float(params.get("grain", 0.02)),
+        "brightness": float(params.get("brightness", 1.0)),
+        "speed": float(params.get("speed", 1.0)),
     }
 
 def render_frame(cache, i):
     w, h, frames = cache["w"], cache["h"], cache["frames"]
     loop = bool(cache.get("__loop__", False))
-    denom = (frames - 1) if (loop and frames > 1) else frames
-    t = (i / float(denom)) if denom > 0 else 0.0
+    fps = max(1, int(cache.get("__fps__", 30)))
+    n = max(1, int(cache.get("__frames__", frames)))
+    t_sec = i / float(fps)
+    u = (i / float(max(1, n - 1))) if n > 1 else 0.0
+    duration_sec = max(1.0 / fps, (n - 1) / float(fps))
+    speed = max(0.0, float(cache.get("speed", 1.0)))
+
+    def phase_from_rate(rate_hz):
+        scaled_rate = rate_hz * speed
+        if loop:
+            if abs(scaled_rate) < 1e-9:
+                return 0.0
+            cycles = max(1, int(round(abs(scaled_rate) * duration_sec)))
+            return np.copysign(u * cycles, scaled_rate)
+        return scaled_rate * t_sec
 
     fog = cache["fog"]
-    ox = int(round(t * cache["dx"] * w))
-    oy = int(round(t * cache["dy"] * h))
+    ox = int(round(w * phase_from_rate(cache["dx"])))
+    oy = int(round(h * phase_from_rate(cache["dy"])))
     img = ImageChops.offset(fog, ox, oy)
 
     # contrast
@@ -67,6 +84,9 @@ def render_frame(cache, i):
     # grain
     if cache["grain"] and cache["grain"] > 0:
         img = film_grain(img, amount=float(cache["grain"]), seed=cache["seed"] + i * 7)
+
+    if cache["brightness"] != 1.0:
+        img = ImageEnhance.Brightness(img).enhance(float(cache["brightness"]))
 
     return img
 
@@ -82,6 +102,8 @@ EFFECT = {
         {"key": "tint", "label": "色味", "type": "choice", "default": "blue", "choices": ["blue", "purple", "white", "green", "amber"]},
         {"key": "glow", "label": "グロー", "type": "float", "default": 0.35, "min": 0.0, "max": 1.5, "step": 0.05},
         {"key": "grain", "label": "グレイン", "type": "float", "default": 0.02, "min": 0.0, "max": 0.25, "step": 0.01},
+        {"key": "brightness", "label": "brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 2.0, "step": 0.05},
+        {"key": "speed", "label": "speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05},
     ],
     "build_cache": build_cache,
     "render_frame": render_frame,

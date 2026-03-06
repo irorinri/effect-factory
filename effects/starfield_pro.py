@@ -9,7 +9,7 @@ from _fxutil import add_glow, chromatic_aberration, film_grain, fbm_noise, f32_t
 # - Multi-layer parallax star maps + soft nebula haze
 # - Shooting stars with wrap-safe timing
 # - Glow / chromatic aberration / film grain
-# - Loop guarantee: if params["__loop__"] is True, render uses t=i/(frames-1)
+# - Time base: seconds for speed terms, integer-cycle phase when loop is enabled
 # ------------------------------------------------------------
 
 def _make_star_layer(w, h, rng, count, r_min, r_max, brightness_min, brightness_max):
@@ -88,18 +88,22 @@ def build_cache(w, h, frames, seed, params):
 
 def render_frame(cache, i):
     w, h, frames = cache["w"], cache["h"], cache["frames"]
-    loop = bool(getattr(cache.get("params", {}), "get", lambda *_: False)("__loop__", False))  # unused, kept for safety
-
-    # v2 reserved: passed via params inside build_cache? we store none; so reconstruct from cache seed? not possible.
-    # Instead, infer loop mode from cache if last and first must match:
-    # We'll assume loop is enabled when frames>=2 and effect is intended for loop. This plugin is loop-ready anyway.
-    # If you want to force non-loop, set loop_strength=0 in preset.
-    # (App always passes __loop__ but we don't store it; we will store it if build_cache sees it.)
-    # -> Quick fix: check for cache["__loop__"] if present.
     loop = bool(cache.get("__loop__", False))
+    fps = max(1, int(cache.get("__fps__", 30)))
+    n = max(1, int(cache.get("__frames__", frames)))
+    t_sec = i / float(fps)
+    u = (i / float(max(1, n - 1))) if n > 1 else 0.0
+    duration_sec = max(1.0 / fps, (n - 1) / float(fps))
+    speed = max(0.0, float(cache.get("speed", 1.0)))
 
-    denom = (frames - 1) if (loop and frames > 1) else frames
-    t = (i / float(denom)) if denom > 0 else 0.0
+    def phase_from_rate(rate_hz):
+        scaled_rate = rate_hz * speed
+        if loop:
+            if abs(scaled_rate) < 1e-9:
+                return 0.0
+            cycles = max(1, int(round(abs(scaled_rate) * duration_sec)))
+            return np.copysign(u * cycles, scaled_rate)
+        return scaled_rate * t_sec
 
     # Drift cycles (integer multiples of screen)
     dx = int(cache.get("dx_cycles", 2))
@@ -118,20 +122,20 @@ def render_frame(cache, i):
 
     # Nebula subtle movement (wrap)
     neb = cache["neb"]
-    neb_dx = int(round(t * (dx2 * w)))
-    neb_dy = int(round(t * (dy2 * h)))
+    neb_dx = int(round(w * phase_from_rate(dx2)))
+    neb_dy = int(round(h * phase_from_rate(dy2)))
     neb_o = ImageChops.offset(neb, neb_dx, neb_dy)
     out = ImageChops.add(out, neb_o)
 
     tw_map = cache["tw_map"]
-    tw_dx = int(round(t * (w * 1)))
-    tw_dy = int(round(t * (h * 1)))
+    tw_dx = int(round(w * phase_from_rate(1.0)))
+    tw_dy = int(round(h * phase_from_rate(1.0)))
     tw = ImageChops.offset(tw_map, tw_dx, tw_dy)
 
     # Layer helper: offset + brightness mod
     def lay(layer_img_L, kx, ky, base_gain):
-        ox = int(round(t * (kx * w)))
-        oy = int(round(t * (ky * h)))
+        ox = int(round(w * phase_from_rate(kx)))
+        oy = int(round(h * phase_from_rate(ky)))
         L = ImageChops.offset(layer_img_L, ox, oy)
         # twinkle modulation (multiply)
         if base_gain != 1.0:
@@ -165,11 +169,19 @@ def render_frame(cache, i):
     # Shooting stars
     if cache["shoots"]:
         dr = ImageDraw.Draw(out)
+        shoot_period_sec = max(0.1, float(cache.get("shoot_period_sec", 2.0)))
+        shoot_speed_hz = (1.0 / shoot_period_sec) * speed
         for (s, d, x0, y0, vx, vy, width, bright) in cache["shoots"]:
-            # wrap-safe phase
-            phase = (t - s) % 1.0
-            if phase < d:
+            if loop:
+                shoot_cycles = max(1, int(round(shoot_speed_hz * duration_sec)))
+                phase = ((u * shoot_cycles) - s) % 1.0
+                active = phase < d
                 p = phase / max(1e-6, d)
+            else:
+                phase = ((t_sec * shoot_speed_hz) - s) % 1.0
+                active = phase < d
+                p = phase / max(1e-6, d)
+            if active:
                 x1 = x0 + vx * p
                 y1 = y0 + vy * p
                 # trail behind
@@ -196,6 +208,9 @@ def render_frame(cache, i):
     if gr > 0:
         out = film_grain(out, amount=gr, seed=cache["seed"] + i * 97)
 
+    if cache["brightness"] != 1.0:
+        out = ImageEnhance.Brightness(out).enhance(float(cache["brightness"]))
+
     return out
 
 # IMPORTANT: build_cache needs access to params for v2 reserved keys
@@ -204,11 +219,16 @@ def build_cache_v2(w, h, frames, seed, params):
     c = build_cache(w, h, frames, seed, params)
     # stash v2 settings
     c["__loop__"] = bool(params.get("__loop__", False))
+    c["__fps__"] = int(params.get("__fps__", 30))
+    c["__frames__"] = int(params.get("__frames__", frames))
     c["twinkle_strength"] = float(params.get("twinkle", 0.20))
     c["glow_radius"] = float(params.get("glow_radius", 6.0))
     c["glow_strength"] = float(params.get("glow_strength", 0.9))
     c["chromatic"] = int(params.get("chromatic", 2))
     c["grain"] = float(params.get("grain", 0.05))
+    c["brightness"] = float(params.get("brightness", 1.0))
+    c["speed"] = float(params.get("speed", 1.0))
+    c["shoot_period_sec"] = float(params.get("shoot_period_sec", 2.0))
 
     base_dx = int(params.get("drift_x_cycles", 2))
     base_dy = int(params.get("drift_y_cycles", 1))
@@ -232,8 +252,10 @@ EFFECT = {
         {"key": "glow_strength", "label": "グロー強度", "type": "float", "default": 0.9, "min": 0.0, "max": 2.0, "step": 0.05},
         {"key": "chromatic", "label": "色収差(px)", "type": "int", "default": 2, "min": 0, "max": 8, "step": 1},
         {"key": "grain", "label": "フィルムグレイン", "type": "float", "default": 0.05, "min": 0.0, "max": 0.25, "step": 0.01},
+        {"key": "brightness", "label": "brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 2.0, "step": 0.05},
         {"key": "drift_x_cycles", "label": "横ドリフト(周回)", "type": "int", "default": 2, "min": 0, "max": 6, "step": 1, "hint": "ループ1周期で何回幅ぶん移動するか"},
         {"key": "drift_y_cycles", "label": "縦ドリフト(周回)", "type": "int", "default": 1, "min": 0, "max": 6, "step": 1},
+        {"key": "speed", "label": "speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05},
     ],
     "build_cache": build_cache_v2,
     "render_frame": render_frame,
