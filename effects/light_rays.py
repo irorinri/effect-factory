@@ -2,7 +2,7 @@ from PIL import Image, ImageDraw, ImageFilter
 import numpy as np
 import os, sys
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, film_grain, frame_params, max_int, motion_direction_rad, rotate_vector
+from _fxutil import add_glow, film_grain, frame_params, max_int, motion_direction_rad_at, rotate_vector
 
 
 COLOR_PRESETS = {
@@ -86,7 +86,7 @@ def render_frame(cache, i):
     sweep = float(params.get("sweep", defaults["sweep"]))
     flicker = float(params.get("flicker", defaults["flicker"]))
     length = float(params.get("length", defaults["length"]))
-    motion_angle = motion_direction_rad(params, default=defaults["motion_direction"])
+    motion_angle = motion_direction_rad_at(cache, t_sec, default=defaults["motion_direction"])
     color_name = str(params.get("color", defaults["color"]))
     base_col = COLOR_PRESETS.get(color_name, COLOR_PRESETS[defaults["color"]])
 

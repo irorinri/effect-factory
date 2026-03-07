@@ -2,7 +2,7 @@ from PIL import Image, ImageEnhance
 import numpy as np
 import os, sys
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import chromatic_aberration, film_grain, frame_params, motion_direction_rad, rotate_vector
+from _fxutil import chromatic_aberration, film_grain, frame_params, integrated_motion_offset, motion_direction_rad_at
 
 
 def build_cache(w, h, frames, seed, params):
@@ -64,7 +64,7 @@ def render_frame(cache, i):
     scanlines = max(0.0, float(params.get("scanlines", defaults["scanlines"])))
     noise_amount = max(0.0, float(params.get("noise", defaults["noise"])))
     tear_prob = max(0.0, float(params.get("tear_prob", defaults["tear_prob"])))
-    motion_angle = motion_direction_rad(params, default=defaults["motion_direction"])
+    motion_angle = motion_direction_rad_at(cache, t_sec, default=defaults["motion_direction"])
 
     img = np.zeros((h, w, 3), dtype=np.float32)
 
@@ -79,7 +79,7 @@ def render_frame(cache, i):
 
     if noise_amount > 0:
         base_noise = cache["base_noise"]
-        oxf, oyf = rotate_vector(phase_from_rate(97.0), phase_from_rate(41.0), motion_angle)
+        oxf, oyf = integrated_motion_offset(cache, t_sec, 97.0 * speed, 41.0 * speed, default=defaults["motion_direction"])
         nn = np.roll(np.roll(base_noise, int(oxf) % w, axis=1), int(oyf) % h, axis=0)
         img += nn[..., None] * noise_amount * 0.75
 

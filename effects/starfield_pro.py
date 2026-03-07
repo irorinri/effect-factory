@@ -2,7 +2,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageEnhance
 import numpy as np
 import os, sys
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, chromatic_aberration, fbm_noise, f32_to_pil, film_grain, frame_params, max_int, max_numeric, motion_direction_rad, rotate_vector
+from _fxutil import add_glow, chromatic_aberration, fbm_noise, f32_to_pil, film_grain, frame_params, integrated_motion_offset, max_int, max_numeric, motion_direction_rad_at, rotate_vector
 
 
 def _make_star_layer(w, h, rng, count, r_min, r_max, brightness_min, brightness_max):
@@ -133,22 +133,22 @@ def render_frame(cache, i):
     nebula_strength = max(0.0, float(params.get("nebula", defaults["nebula"])))
     drift_x = float(params.get("drift_x_cycles", defaults["drift_x_cycles"]))
     drift_y = float(params.get("drift_y_cycles", defaults["drift_y_cycles"]))
-    motion_angle = motion_direction_rad(params, default=defaults["motion_direction"])
+    motion_angle = motion_direction_rad_at(cache, t_sec, default=defaults["motion_direction"])
 
     out = Image.new("RGB", (w, h), (0, 0, 0))
 
     if nebula_strength > 0:
-        neb_dxf, neb_dyf = rotate_vector(w * phase_from_rate(drift_x), h * phase_from_rate(drift_y), motion_angle)
+        neb_dxf, neb_dyf = integrated_motion_offset(cache, t_sec, w * drift_x * speed, h * drift_y * speed, default=defaults["motion_direction"])
         neb_o = ImageChops.offset(cache["neb"], int(round(neb_dxf)), int(round(neb_dyf)))
         if nebula_strength != 1.0:
             neb_o = ImageEnhance.Brightness(neb_o).enhance(nebula_strength)
         out = ImageChops.add(out, neb_o)
 
-    tw_dxf, tw_dyf = rotate_vector(w * phase_from_rate(1.0), h * phase_from_rate(1.0), motion_angle)
+    tw_dxf, tw_dyf = integrated_motion_offset(cache, t_sec, w * speed, h * speed, default=defaults["motion_direction"])
     tw = ImageChops.offset(cache["tw_map"], int(round(tw_dxf)), int(round(tw_dyf)))
 
     def lay(layer_img, kx, ky, base_gain):
-        oxf, oyf = rotate_vector(w * phase_from_rate(kx), h * phase_from_rate(ky), motion_angle)
+        oxf, oyf = integrated_motion_offset(cache, t_sec, w * kx * speed, h * ky * speed, default=defaults["motion_direction"])
         layer = ImageChops.offset(layer_img, int(round(oxf)), int(round(oyf)))
         if twinkle_strength > 0:
             a = np.asarray(layer, dtype=np.float32) / 255.0

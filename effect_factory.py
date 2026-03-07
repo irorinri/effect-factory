@@ -65,6 +65,153 @@ def _ffmpeg_pipe_raw_rgb(ffmpeg_path, w, h, fps, out_mp4, encoder, nv_preset, bi
     return p, cmd
 
 
+def _normalize_signed_degrees(value: float) -> float:
+    value = ((float(value) + 180.0) % 360.0) - 180.0
+    return 180.0 if abs(value + 180.0) < 1e-9 else value
+
+
+def _clamp01(value: float) -> float:
+    return 0.0 if value <= 0.0 else (1.0 if value >= 1.0 else float(value))
+
+
+def _shortest_degree_delta(left_value: float, right_value: float) -> float:
+    left = _normalize_signed_degrees(left_value)
+    right = _normalize_signed_degrees(right_value)
+    delta = ((right - left + 180.0) % 360.0) - 180.0
+    if abs(delta + 180.0) < 1e-9:
+        raw_delta = float(right_value) - float(left_value)
+        return 180.0 if raw_delta >= 0.0 else -180.0
+    return delta
+
+
+def _interpolate_signed_degrees(left_value: float, right_value: float, mix: float) -> float:
+    delta = _shortest_degree_delta(left_value, right_value)
+    return _normalize_signed_degrees(float(left_value) + delta * float(mix))
+
+
+def _unwrap_signed_degree_sequence(values) -> list[float]:
+    out = []
+    prev = None
+    for value in values:
+        current = _normalize_signed_degrees(value)
+        if prev is None:
+            out.append(current)
+            prev = current
+            continue
+        current = prev + _shortest_degree_delta(prev, current)
+        out.append(current)
+        prev = current
+    return out
+
+
+def _frame_time_sec(frame_i: int, fps: int, duration_sec: float) -> float:
+    return min(float(duration_sec), max(0.0, int(frame_i) / float(max(1, int(fps)))))
+
+
+def _time_to_frame_index(time_sec: float, fps: int, frames: int) -> int:
+    fps = max(1, int(fps))
+    frames = max(1, int(frames))
+    frame_i = int(np.floor(max(0.0, float(time_sec)) * float(fps) + 1e-9))
+    return min(frames - 1, max(0, frame_i))
+
+
+def _pchip_endpoint_slope(h0: float, h1: float, delta0: float, delta1: float) -> float:
+    slope = ((2.0 * h0 + h1) * delta0 - h0 * delta1) / max(1e-6, h0 + h1)
+    if abs(slope) <= 1e-12:
+        return 0.0
+    if np.sign(slope) != np.sign(delta0):
+        return 0.0
+    if np.sign(delta0) != np.sign(delta1) and abs(slope) > abs(3.0 * delta0):
+        return 3.0 * delta0
+    return slope
+
+
+def _pchip_slopes(xs, ys) -> list[float]:
+    n = len(xs)
+    if n <= 1:
+        return [0.0] * n
+    hs = [max(1e-6, float(xs[i + 1]) - float(xs[i])) for i in range(n - 1)]
+    deltas = [(float(ys[i + 1]) - float(ys[i])) / hs[i] for i in range(n - 1)]
+    if n == 2:
+        return [deltas[0], deltas[0]]
+    slopes = [0.0] * n
+    slopes[0] = _pchip_endpoint_slope(hs[0], hs[1], deltas[0], deltas[1])
+    slopes[-1] = _pchip_endpoint_slope(hs[-1], hs[-2], deltas[-1], deltas[-2])
+    for i in range(1, n - 1):
+        prev_delta = deltas[i - 1]
+        next_delta = deltas[i]
+        if abs(prev_delta) <= 1e-12 or abs(next_delta) <= 1e-12 or np.sign(prev_delta) != np.sign(next_delta):
+            slopes[i] = 0.0
+            continue
+        w1 = 2.0 * hs[i] + hs[i - 1]
+        w2 = hs[i] + 2.0 * hs[i - 1]
+        slopes[i] = (w1 + w2) / ((w1 / prev_delta) + (w2 / next_delta))
+    return slopes
+
+
+def _pchip_interpolate(xs, ys, x_value: float) -> float:
+    n = len(xs)
+    if n == 0:
+        return 0.0
+    if n == 1:
+        return float(ys[0])
+    x_value = float(x_value)
+    if x_value <= float(xs[0]):
+        return float(ys[0])
+    if x_value >= float(xs[-1]):
+        return float(ys[-1])
+    slopes = _pchip_slopes(xs, ys)
+    seg = 0
+    for i in range(n - 1):
+        if x_value <= float(xs[i + 1]) + 1e-9:
+            seg = i
+            break
+    x0 = float(xs[seg])
+    x1 = float(xs[seg + 1])
+    h = max(1e-6, x1 - x0)
+    s = _clamp01((x_value - x0) / h)
+    y0 = float(ys[seg])
+    y1 = float(ys[seg + 1])
+    m0 = float(slopes[seg])
+    m1 = float(slopes[seg + 1])
+    s2 = s * s
+    s3 = s2 * s
+    h00 = 2.0 * s3 - 3.0 * s2 + 1.0
+    h10 = s3 - 2.0 * s2 + s
+    h01 = -2.0 * s3 + 3.0 * s2
+    h11 = s3 - s2
+    return h00 * y0 + h10 * h * m0 + h01 * y1 + h11 * h * m1
+
+
+def _motion_direction_value_for_time(states, time_sec: float, default: float = 0.0) -> float:
+    samples = []
+    for state in states:
+        try:
+            marker_time = float(state.get("time_sec", 0.0))
+        except Exception:
+            continue
+        params = state.get("resolved_params", {})
+        if not isinstance(params, dict):
+            params = {}
+        try:
+            marker_angle = float(params.get("motion_direction", default))
+        except Exception:
+            marker_angle = float(default)
+        if samples and abs(samples[-1][0] - marker_time) <= 1e-9:
+            samples[-1] = (marker_time, marker_angle)
+        else:
+            samples.append((marker_time, marker_angle))
+    if not samples:
+        return _normalize_signed_degrees(default)
+    if time_sec <= samples[0][0]:
+        return _normalize_signed_degrees(samples[0][1])
+    if time_sec >= samples[-1][0]:
+        return _normalize_signed_degrees(samples[-1][1])
+    xs = [sample[0] for sample in samples]
+    ys = _unwrap_signed_degree_sequence([sample[1] for sample in samples])
+    return _normalize_signed_degrees(_pchip_interpolate(xs, ys, time_sec))
+
+
 @dataclass
 class EffectPlugin:
     id: str
@@ -425,10 +572,6 @@ class EffectFactoryApp(tk.Tk):
         ttk.Label(copy_row, text="Codex用テキスト", foreground="#8899a7").pack(side="left")
         ttk.Button(copy_row, text="コピー", command=self._copy_selection_summary).pack(side="right")
         ttk.Entry(selected, textvariable=self.selection_summary, state="readonly").pack(fill="x", padx=10, pady=(0, 10))
-
-        mode = ttk.LabelFrame(body, text="調整")
-        mode.pack(fill="x", pady=(0, 10))
-        ttk.Label(mode, text="主要な項目だけを表示します。迷わず少しずつ見た目を整える前提です。", justify="left").pack(anchor="w", padx=10, pady=10)
 
         self.quick_box = ttk.LabelFrame(body, text="かんたん調整")
         self.quick_box.pack(fill="x", pady=(0, 10))
@@ -1578,6 +1721,8 @@ class EffectFactoryApp(tk.Tk):
             seed=self._animation_seed(current_state, timeline_states),
             params=runtime,
         )
+        if isinstance(cache, dict) and "__timeline__" in runtime:
+            cache["__timeline__"] = runtime["__timeline__"]
         return {
             "cache": cache,
             "current_state": current_state,
@@ -1591,16 +1736,14 @@ class EffectFactoryApp(tk.Tk):
         if mix >= 1.0:
             return right_value
         if ptype in ("choice", "bool"):
-            return left_value if mix < 0.5 else right_value
+            return left_value if mix < 1.0 else right_value
         try:
-            out = float(left_value) + (float(right_value) - float(left_value)) * float(mix)
             if key == "motion_direction":
-                lo = -180.0
-                hi = 180.0
-                return min(hi, max(lo, out))
+                return _interpolate_signed_degrees(left_value, right_value, mix)
+            out = float(left_value) + (float(right_value) - float(left_value)) * float(mix)
             return out
         except Exception:
-            return left_value if mix < 0.5 else right_value
+            return left_value if mix < 1.0 else right_value
 
     def _runtime_params_for_time(self, plugin, current_state, timeline_states, time_sec: float):
         runtime = dict(current_state["runtime"])
@@ -1608,12 +1751,7 @@ class EffectFactoryApp(tk.Tk):
             return runtime
         states = list(timeline_states)
         param_types = {p["key"]: p.get("type", "float") for p in plugin.params}
-        fps = max(1, int(current_state["runtime"].get("__fps__", 30)))
-        snap_window = 0.5 / float(fps)
-        nearest = min(states, key=lambda state: abs(float(state.get("time_sec", 0.0)) - float(time_sec)))
-        if abs(float(nearest.get("time_sec", 0.0)) - float(time_sec)) <= snap_window + 1e-9:
-            runtime.update(nearest["resolved_params"])
-        elif time_sec <= float(states[0].get("time_sec", 0.0)):
+        if time_sec <= float(states[0].get("time_sec", 0.0)):
             runtime.update(states[0]["resolved_params"])
         elif time_sec >= float(states[-1].get("time_sec", 0.0)):
             runtime.update(states[-1]["resolved_params"])
@@ -1628,12 +1766,15 @@ class EffectFactoryApp(tk.Tk):
                     right = candidate_right
                     left_time = float(candidate_left.get("time_sec", 0.0))
                     span = max(1e-6, right_time - left_time)
-                    mix = 0.0 if time_sec <= left_time else min(1.0, max(0.0, (time_sec - left_time) / span))
+                    mix = 0.0 if time_sec <= left_time else _clamp01((time_sec - left_time) / span)
                     break
             base_params = current_state["resolved_params"]
             for p in plugin.params:
                 key = p["key"]
                 default = base_params.get(key, p.get("default"))
+                if key == "motion_direction":
+                    runtime[key] = _motion_direction_value_for_time(states, time_sec, default)
+                    continue
                 left_value = left["resolved_params"].get(key, default)
                 right_value = right["resolved_params"].get(key, left_value)
                 runtime[key] = self._interpolate_param_value(key, param_types.get(key, "float"), left_value, right_value, mix)
@@ -1920,13 +2061,14 @@ class EffectFactoryApp(tk.Tk):
                 with self._preview_runtime_lock:
                     runtime = dict(self._preview_runtime)
                 playhead_sec = min(duration_sec, max(0.0, float(runtime.get("playhead_sec", 0.0))))
-                frame_i = min(output_frames - 1, max(0, int(round(playhead_sec * output_fps))))
+                frame_i = _time_to_frame_index(playhead_sec, output_fps, output_frames)
+                sample_time_sec = _frame_time_sec(frame_i, output_fps, duration_sec)
                 frame_key = (frame_i, round(playhead_sec, 4))
                 if not bool(runtime.get("playing")) and frame_key == last_frame_key:
                     time.sleep(0.03)
                     last = time.perf_counter()
                     continue
-                img = self._render_frame_at_time(plugin, render_context, frame_i, playhead_sec)
+                img = self._render_frame_at_time(plugin, render_context, frame_i, sample_time_sec)
                 last_frame_key = frame_key
                 try:
                     while True:
@@ -2006,7 +2148,7 @@ class EffectFactoryApp(tk.Tk):
             self.msgq.put(("log", "[PREVIEW] FFmpeg: " + " ".join([f'"{c}"' if " " in c else c for c in cmd])))
             first_img = None
             for i in range(frames):
-                time_sec = min(duration, i / float(max(1, fps)))
+                time_sec = _frame_time_sec(i, fps, duration)
                 img = self._render_frame_at_time(plugin, render_context, i, time_sec)
                 if first_img is None:
                     first_img = img.copy()
@@ -2054,7 +2196,7 @@ class EffectFactoryApp(tk.Tk):
             p, cmd = _ffmpeg_pipe_raw_rgb(self.ffmpeg_path.get().strip(), w, h, fps, mp4, self.encoder.get(), self.nv_preset.get(), self.bitrate.get().strip() or "12M")
             self.msgq.put(("log", "FFmpeg: " + " ".join([f'"{c}"' if " " in c else c for c in cmd])))
             for i in range(frames):
-                time_sec = min(duration, i / float(max(1, fps)))
+                time_sec = _frame_time_sec(i, fps, duration)
                 img = self._render_frame_at_time(plugin, render_context, i, time_sec)
                 p.stdin.write(img.tobytes())
                 if i % max(1, frames // 100) == 0:

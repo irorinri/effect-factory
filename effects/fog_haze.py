@@ -2,7 +2,7 @@ from PIL import ImageChops, ImageEnhance, ImageFilter
 import numpy as np
 import os, sys
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, fbm_noise, f32_to_pil, film_grain, frame_params, motion_direction_rad, rotate_vector
+from _fxutil import add_glow, fbm_noise, f32_to_pil, film_grain, frame_params, integrated_motion_offset
 
 
 TINTS = {
@@ -75,11 +75,12 @@ def render_frame(cache, i):
     if blur > 0:
         img = img.filter(ImageFilter.GaussianBlur(radius=blur))
 
-    motion_angle = motion_direction_rad(params, default=defaults["motion_direction"])
-    oxf, oyf = rotate_vector(
-        w * phase_from_rate(float(params.get("drift_x_cycles", defaults["drift_x_cycles"]))),
-        h * phase_from_rate(float(params.get("drift_y_cycles", defaults["drift_y_cycles"]))),
-        motion_angle,
+    oxf, oyf = integrated_motion_offset(
+        cache,
+        t_sec,
+        w * float(params.get("drift_x_cycles", defaults["drift_x_cycles"])) * speed,
+        h * float(params.get("drift_y_cycles", defaults["drift_y_cycles"])) * speed,
+        default=defaults["motion_direction"],
     )
     img = ImageChops.offset(img, int(round(oxf)), int(round(oyf)))
     img = ImageEnhance.Contrast(img).enhance(float(params.get("contrast", defaults["contrast"])))

@@ -2,7 +2,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
 import numpy as np
 import os, sys
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, film_grain, frame_params, max_int, max_numeric, motion_direction_rad, rotate_vector
+from _fxutil import add_glow, film_grain, frame_params, integrated_motion_offset, max_int, max_numeric, motion_direction_rad_at, rotate_vector
 
 
 def _draw_piece(draw, cx, cy, size, aspect, ang_deg, shade, alpha, shape):
@@ -117,7 +117,6 @@ def render_frame(cache, i):
     density_ratio = min(1.0, density / max(1e-6, cache["max_density"]))
     current_layers = min(float(cache["max_layers"]), max(1.0, float(params.get("layers", defaults["layers"]))))
     samples = max(1, int(round(float(params.get("mblur_samples", defaults["mblur_samples"])))) )
-    motion_angle = motion_direction_rad(params, default=defaults["motion_direction"])
 
     layer_imgs = [Image.new("RGBA", (w, h), (0, 0, 0, 0)) for _ in range(3)]
     layer_draws = [ImageDraw.Draw(img) for img in layer_imgs]
@@ -135,14 +134,17 @@ def render_frame(cache, i):
             offset_t = (sample_idx / samples) * (1.0 / fps)
             ts_u = (u + offset_u) % 1.0 if loop else (u + offset_u)
             ts_t = t_sec + offset_t
-            dx, dy = rotate_vector(
-                w * phase_from_rate(piece["kx"], ts_u, ts_t),
-                h * phase_from_rate(piece["ky"], ts_u, ts_t),
-                motion_angle,
+            dx, dy = integrated_motion_offset(
+                cache,
+                ts_t,
+                w * piece["kx"] * speed,
+                h * piece["ky"] * speed,
+                default=defaults["motion_direction"],
             )
             x = (piece["x0"] + dx) % w
             y = (piece["y0"] + dy) % h
 
+            motion_angle = motion_direction_rad_at(cache, ts_t, default=defaults["motion_direction"])
             sway_phase = phase_from_rate(piece["ff"], ts_u, ts_t)
             sway = np.sin(2.0 * np.pi * sway_phase + piece["fp"]) * (8.0 + 14.0 * piece["depth_ratio"])
             sway_dx, sway_dy = rotate_vector(sway, 0.0, motion_angle)

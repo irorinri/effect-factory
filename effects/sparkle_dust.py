@@ -3,7 +3,7 @@ import numpy as np
 import os, sys
 
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, film_grain, frame_params, max_int, max_numeric, motion_direction_rad, rotate_vector
+from _fxutil import add_glow, film_grain, frame_params, integrated_motion_offset, max_int, max_numeric
 
 
 PALETTES = {
@@ -92,7 +92,6 @@ def render_frame(cache, i):
     drift_y = max(0.0, float(params.get("drift_y_cycles", defaults["drift_y_cycles"])))
     palette_name = str(params.get("palette", defaults["palette"]))
     pr, pg, pb = PALETTES.get(palette_name, PALETTES[defaults["palette"]])
-    motion_angle = motion_direction_rad(params, default=defaults["motion_direction"])
 
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     dr = ImageDraw.Draw(img)
@@ -102,10 +101,12 @@ def render_frame(cache, i):
         if vis <= 0.0:
             continue
 
-        dx, dy = rotate_vector(
-            w * phase_from_rate(particle["drift_fx"] * drift_x),
-            h * phase_from_rate(particle["drift_fy"] * drift_y),
-            motion_angle,
+        dx, dy = integrated_motion_offset(
+            cache,
+            t_sec,
+            w * particle["drift_fx"] * drift_x * speed,
+            h * particle["drift_fy"] * drift_y * speed,
+            default=defaults["motion_direction"],
         )
         x = (particle["x0"] + dx) % w
         y = (particle["y0"] + dy) % h
