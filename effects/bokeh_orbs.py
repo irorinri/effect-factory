@@ -2,7 +2,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
 import numpy as np
 import os, sys
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, chromatic_aberration, film_grain, frame_params, integrated_motion_offset, max_int, max_numeric
+from _fxutil import add_glow, chromatic_aberration, film_grain, frame_params, integrated_motion_offset, integrated_rate_phase, max_int, max_numeric
 
 
 def _visible_fraction(target: float, index: int) -> float:
@@ -73,19 +73,12 @@ def render_frame(cache, i):
     duration_sec = max(1.0 / fps, (n - 1) / float(fps))
     params = frame_params(cache)
     defaults = cache["defaults"]
-    speed = max(0.0, float(params.get("speed", defaults["speed"])))
-
     def phase_from_rate(rate_hz):
-        scaled_rate = float(rate_hz) * speed
-        if loop:
-            return scaled_rate * duration_sec * u
-        return scaled_rate * t_sec
+        return integrated_rate_phase(cache, t_sec, rate_hz, scale_keys=("speed",), scale_defaults=defaults)
 
     count = min(float(cache["max_count"]), max(0.0, float(params.get("count", defaults["count"]))))
     size_min = max(0.1, float(params.get("size_min", defaults["size_min"])))
     size_max = max(size_min, float(params.get("size_max", defaults["size_max"])))
-    drift_x = max(0.0, float(params.get("drift_x_cycles", defaults["drift_x_cycles"])))
-    drift_y = max(0.0, float(params.get("drift_y_cycles", defaults["drift_y_cycles"])))
     tr = float(params.get("tint_r", defaults["tint_r"]))
     tg = float(params.get("tint_g", defaults["tint_g"]))
     tb = float(params.get("tint_b", defaults["tint_b"]))
@@ -101,9 +94,12 @@ def render_frame(cache, i):
         dx, dy = integrated_motion_offset(
             cache,
             t_sec,
-            w * orb["drift_fx"] * drift_x * speed,
-            h * orb["drift_fy"] * drift_y * speed,
+            w * orb["drift_fx"],
+            h * orb["drift_fy"],
             default=defaults["motion_direction"],
+            x_scale_keys=("drift_x_cycles", "speed"),
+            y_scale_keys=("drift_y_cycles", "speed"),
+            scale_defaults=defaults,
         )
         x = (orb["x0"] + dx) % w
         y = (orb["y0"] + dy) % h

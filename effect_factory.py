@@ -1,4 +1,4 @@
-﻿import os, json, time, queue, threading, subprocess, hashlib, importlib.util, zipfile
+import os, json, time, queue, threading, subprocess, hashlib, importlib.util, zipfile
 from dataclasses import dataclass
 from datetime import datetime
 import tkinter as tk
@@ -280,9 +280,9 @@ def resolve_value(rng: np.random.Generator, spec, base_value, pdesc=None):
 
 def _effect_category(effect_id: str, name: str) -> str:
     s = f"{effect_id} {name}".lower()
-    if any(k in s for k in ["sparkle", "star", "confetti"]):
+    if any(k in s for k in ["sparkle", "star", "confetti", "rain"]):
         return "Particles"
-    if any(k in s for k in ["bokeh", "fog", "glow"]):
+    if any(k in s for k in ["bokeh", "fog", "glow", "aurora", "nebula"]):
         return "Glow"
     if any(k in s for k in ["line", "ray"]):
         return "Lines"
@@ -293,7 +293,7 @@ def _effect_category(effect_id: str, name: str) -> str:
 
 def _effect_usage(effect_id: str, name: str) -> str:
     s = f"{effect_id} {name}".lower()
-    return "背景向け" if any(k in s for k in ["fog", "starfield"]) else "Overlay向け"
+    return "鬮｢・ｭ隴ｴ・ｧ陷搾ｽｹ髯ｷ・ｷ闔会ｽ｣繝ｻ・ｰ" if any(k in s for k in ["fog", "starfield", "aurora", "nebula"]) else "Overlay髯ｷ・ｷ闔会ｽ｣繝ｻ・ｰ"
 
 
 class CollapsibleSection(ttk.Frame):
@@ -309,7 +309,7 @@ class CollapsibleSection(ttk.Frame):
         self._refresh()
 
     def _refresh(self):
-        self._header.configure(text=("▼ " if self._expanded.get() else "▶ ") + self._title)
+        self._header.configure(text=("髫ｨ繝ｻ・ｽ・ｼ " if self._expanded.get() else "髫ｨ繝ｻ・ｽ・ｶ ") + self._title)
 
     def toggle(self):
         if self._expanded.get():
@@ -352,11 +352,22 @@ class EffectFactoryApp(tk.Tk):
     GALLERY_MIN_THUMB_WIDTH = 88
     HISTORY_MAX = 30
     TIMELINE_MARKERS = ("X", "Y", "Z")
+    TIMELINE_HOLD_MARKERS = {"X": "xx", "Y": "yy", "Z": "zz"}
     TIMELINE_MARKER_COLORS = {"X": "#ff8a5b", "Y": "#5bc0eb", "Z": "#9bde6d"}
+    EFFECT_ASSET_SPECS = {
+        "png_rain": {
+            "runtime_key": "particle_sprite_path",
+            "label": "邊貞ｭ千判蜒襲NG",
+            "dialog_title": "髮ｨ邊偵↓菴ｿ縺・城℃PNG繧帝∈謚・,
+            "button": "PNG繧帝∈縺ｶ",
+            "hint": "騾城℃PNG1譫壹′邊貞ｭ舌↓縺ｪ繧翫∪縺吶よ悴驕ｸ謚樊凾縺ｯ蜀・鳩縺ｮ縺励★縺冗判蜒上ｒ菴ｿ縺・∪縺吶・,
+            "filetypes": [("騾城℃PNG", "*.png")],
+        },
+    }
 
     def __init__(self):
         super().__init__()
-        self.title("Effect Factory (素材生成) v2")
+        self.title("Effect Factory (邏譚千函謌・ v2")
         self.geometry("1440x860")
         self.minsize(1260, 760)
         self.configure(bg="#0d1117")
@@ -369,7 +380,7 @@ class EffectFactoryApp(tk.Tk):
         self._history_index = -1
         self._history_sig = None
         self.timeline_position = tk.DoubleVar(value=0.0)
-        self.timeline_status = tk.StringVar(value="X / Y / Z に現在の見た目を保存できます")
+        self.timeline_status = tk.StringVar(value="X / Y / Z に現在位置の値を保存できます")
         self.timeline_time_text = tk.StringVar(value="0.00s / 0.00s")
         self.timeline_markers = {}
         self.timeline_selected_marker = None
@@ -378,6 +389,8 @@ class EffectFactoryApp(tk.Tk):
         self._timeline_after_id = None
         self._timeline_last_tick = None
         self._timeline_dragging = False
+        self._timeline_drag_marker_label = None
+        self._timeline_drag_dirty = False
         self._preview_runtime_lock = threading.Lock()
         self._preview_runtime = {"playhead_sec": 0.0, "playing": False}
 
@@ -389,13 +402,13 @@ class EffectFactoryApp(tk.Tk):
 
         self.plugins = load_effects(self.effects_dir)
         if not self.plugins:
-            messagebox.showerror("エラー", "effects フォルダにプラグインが見つかりません。")
+            messagebox.showerror("Error", "effects フォルダからプラグインを読み込めませんでした。")
             self.destroy()
             return
         self.presets = load_presets(self.presets_dir)
 
         self.ffmpeg_path = tk.StringVar(value="ffmpeg")
-        self.output_dir = tk.StringVar(value="C:\\Users\\iro\\Desktop\\共有素材\\effect素材")
+        self.output_dir = tk.StringVar(value="C:\\Users\\iro\\Desktop\\effect_exports")
         self.file_prefix = tk.StringVar(value="overlay")
         self.w = tk.IntVar(value=1920)
         self.h = tk.IntVar(value=1080)
@@ -413,12 +426,15 @@ class EffectFactoryApp(tk.Tk):
         self.live_preview_seconds = tk.DoubleVar(value=4.0)
         self.preview_auto_refresh = tk.BooleanVar(value=True)
         self.show_log = tk.BooleanVar(value=False)
-        self.preview_status = tk.StringVar(value="プレビュー待機中")
-        self.preview_info = tk.StringVar(value="左で見た目を選び、右で少し調整します")
+        self.preview_status = tk.StringVar(value="驛｢譎丞ｹｲ・取ｨ抵ｽｹ譎∽ｾｭ・守､ｼ・ｹ譎｢・ｽ・ｼ髯溯ｼ斐・繝ｻ・ｩ雋贋ｼ夲ｽｽ・ｸ繝ｻ・ｭ")
+        self.preview_info = tk.StringVar(value="下のタイムラインで X / Y / Z に記録できます")
         self.selection_summary = tk.StringVar(value="")
-        self.gallery_filter = tk.StringVar(value="すべて")
+        self.effect_asset_title = tk.StringVar(value="")
+        self.effect_asset_path_text = tk.StringVar(value="")
+        self.effect_asset_hint = tk.StringVar(value="")
+        self.gallery_filter = tk.StringVar(value="驍ｵ・ｺ陷ｷ・ｶ遶冗距・ｸ・ｺ繝ｻ・ｦ")
         self.gallery_search = tk.StringVar(value="")
-        self.random_strength = tk.StringVar(value="ふつう")
+        self.random_strength = tk.StringVar(value="medium")
         self.random_lock_color = tk.BooleanVar(value=False)
         self.random_lock_shape = tk.BooleanVar(value=False)
         self.random_lock_motion = tk.BooleanVar(value=False)
@@ -433,12 +449,13 @@ class EffectFactoryApp(tk.Tk):
         self._state_loaded_outdir = None
 
         preset_names = list(self.presets.keys())
-        self.preset_name = tk.StringVar(value=(preset_names[0] if preset_names else "（なし）"))
+        self.preset_name = tk.StringVar(value=(preset_names[0] if preset_names else "(none)"))
         self.effect_id = tk.StringVar(value=list(self.plugins.keys())[0])
         self.selected_gallery_key = None
         self.param_vars = {}
         self.param_desc = {}
         self.param_overrides = set()
+        self.effect_asset_paths = {}
         self.thumb_cache = {}
         self.gallery_widgets = {}
         self.gallery_photo_refs = {}
@@ -503,18 +520,18 @@ class EffectFactoryApp(tk.Tk):
         self._build_settings_pane(right)
         self._build_footer(root)
         self._build_log_area(root)
-        self._log("v2: 生成ロジックを維持したまま初心者向け UI を追加しました。")
+        self._log("[INFO] UI ready")
 
     def _build_gallery_pane(self, parent):
         parent.rowconfigure(1, weight=1)
         parent.columnconfigure(0, weight=1)
-        head = ttk.LabelFrame(parent, text="見た目を選ぶ")
+        head = ttk.LabelFrame(parent, text="鬮ｫ遨ゑｽｹ譏ｶ陞ｺ鬨ｾ・ｶ繝ｻ・ｮ驛｢・ｧ陝ｶ譏ｶ繝ｻ驍ｵ・ｺ繝ｻ・ｶ")
         head.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        ttk.Label(head, text="サムネイルから選ぶと、プリセットとエフェクトが切り替わります。", justify="left").pack(anchor="w", padx=10, pady=(10, 4))
+        ttk.Label(head, text="見た目を選んで、必要なところだけ調整してすぐ確認できます。", justify="left").pack(anchor="w", padx=10, pady=(10, 4))
         tools = ttk.Frame(head)
         tools.pack(fill="x", padx=10, pady=(0, 10))
         ttk.Entry(tools, textvariable=self.gallery_search).pack(side="left", fill="x", expand=True)
-        ttk.Combobox(tools, textvariable=self.gallery_filter, state="readonly", values=["すべて", "Particles", "Glow", "Lines", "Noise", "Abstract", "Overlay向け", "背景向け"], width=12).pack(side="left", padx=(8, 0))
+        ttk.Combobox(tools, textvariable=self.gallery_filter, state="readonly", values=["驍ｵ・ｺ陷ｷ・ｶ遶冗距・ｸ・ｺ繝ｻ・ｦ", "Particles", "Glow", "Lines", "Noise", "Abstract", "Overlay髯ｷ・ｷ闔会ｽ｣繝ｻ・ｰ", "鬮｢・ｭ隴ｴ・ｧ陷搾ｽｹ髯ｷ・ｷ闔会ｽ｣繝ｻ・ｰ"], width=12).pack(side="left", padx=(8, 0))
         self.gallery_scroll = ScrollableFrame(parent)
         self.gallery_scroll.grid(row=1, column=0, sticky="nsew")
         self.gallery_grid = tk.Frame(self.gallery_scroll.interior, bg="#121820", bd=0, highlightthickness=0)
@@ -528,18 +545,18 @@ class EffectFactoryApp(tk.Tk):
         parent.columnconfigure(0, weight=1)
         title = ttk.Frame(parent)
         title.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        ttk.Label(title, text="ライブプレビュー", font=("", 18, "bold")).pack(side="left")
-        ttk.Label(title, text="見た目を選ぶ → 少し調整 → すぐ確認", foreground="#7d8d9a").pack(side="left", padx=12)
+        ttk.Label(title, text="驛｢譎｢・ｽ・ｩ驛｢・ｧ繝ｻ・､驛｢譎・§郢晢ｽｻ驛｢譎｢・ｽ・ｬ驛｢譎∽ｾｭ・守､ｼ・ｹ譎｢・ｽ・ｼ", font=("", 18, "bold")).pack(side="left")
+        ttk.Label(title, text="見た目を選ぶ -> 少し調整 -> すぐ確認", foreground="#7d8d9a").pack(side="left", padx=12)
 
-        box = ttk.LabelFrame(parent, text="今の見た目")
+        box = ttk.LabelFrame(parent, text="髣碑・・ｿ・ｫ郢晢ｽｻ鬮ｫ遨ゑｽｹ譏ｶ陞ｺ鬨ｾ・ｶ繝ｻ・ｮ")
         box.grid(row=1, column=0, sticky="nsew")
         box.rowconfigure(1, weight=1)
         box.columnconfigure(0, weight=1)
         bar = ttk.Frame(box)
         bar.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
-        ttk.Checkbutton(bar, text="自動更新", variable=self.preview_auto_refresh).pack(side="left")
+        ttk.Checkbutton(bar, text="鬮｢・ｾ繝ｻ・ｪ髯ｷ讎奇ｽ｢轣假ｽｳ・ｩ髫ｴ繝ｻ・ｽ・ｰ", variable=self.preview_auto_refresh).pack(side="left")
         ttk.Checkbutton(bar, text="ライブ再生", variable=self.live_preview, command=lambda: self._request_preview_rebuild(immediate=True)).pack(side="left", padx=(8, 0))
-        ttk.Label(bar, text="品質").pack(side="left", padx=(12, 4))
+        ttk.Label(bar, text="髯ｷ・ｩ遶擾ｽｬ繝ｻ・ｳ繝ｻ・ｪ").pack(side="left", padx=(12, 4))
         ttk.OptionMenu(bar, self.live_preview_scale, self.live_preview_scale.get(), 0.25, 0.33, 0.5, command=lambda *_: self._request_preview_rebuild(immediate=True)).pack(side="left")
         ttk.Label(bar, text="FPS").pack(side="left", padx=(12, 4))
         ttk.OptionMenu(bar, self.live_preview_fps, self.live_preview_fps.get(), 10, 15, 20, 30, command=lambda *_: self._request_preview_rebuild(immediate=True)).pack(side="left")
@@ -547,7 +564,7 @@ class EffectFactoryApp(tk.Tk):
         wrap.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 8))
         wrap.rowconfigure(0, weight=1)
         wrap.columnconfigure(0, weight=1)
-        self.preview_label = tk.Label(wrap, bg="#05080b", fg="#dfe8ef", text="プレビュー準備中", font=("", 18, "bold"))
+        self.preview_label = tk.Label(wrap, bg="#05080b", fg="#dfe8ef", text="驛｢譎丞ｹｲ・取ｨ抵ｽｹ譎∽ｾｭ・守､ｼ・ｹ譎｢・ｽ・ｼ髮九・鞫ｩ繝ｻ蜻ｵ蜿峨・・ｭ", font=("", 18, "bold"))
         self.preview_label.grid(row=0, column=0, sticky="nsew")
         self.preview_overlay = tk.Label(wrap, bg="#163042", fg="#f6fbff", textvariable=self.preview_status, font=("", 11, "bold"), padx=12, pady=6)
         self.preview_overlay.place(relx=0.5, rely=0.05, anchor="n")
@@ -561,7 +578,7 @@ class EffectFactoryApp(tk.Tk):
         scroll.grid(row=0, column=0, sticky="nsew")
         body = scroll.interior
 
-        selected = ttk.LabelFrame(body, text="選択中")
+        selected = ttk.LabelFrame(body, text="鬯ｩ蛹・ｽｽ・ｸ髫ｰ螢ｽ・ｨ雋ｻ・ｽ・ｸ繝ｻ・ｭ")
         selected.pack(fill="x", pady=(0, 10))
         self.selected_title = ttk.Label(selected, text="-", font=("", 16, "bold"))
         self.selected_title.pack(anchor="w", padx=10, pady=(10, 2))
@@ -570,37 +587,46 @@ class EffectFactoryApp(tk.Tk):
         copy_row = ttk.Frame(selected)
         copy_row.pack(fill="x", padx=10, pady=(0, 4))
         ttk.Label(copy_row, text="Codex用テキスト", foreground="#8899a7").pack(side="left")
-        ttk.Button(copy_row, text="コピー", command=self._copy_selection_summary).pack(side="right")
+        ttk.Button(copy_row, text="驛｢・ｧ繝ｻ・ｳ驛｢譎・ｱ堤ｹ晢ｽｻ", command=self._copy_selection_summary).pack(side="right")
         ttk.Entry(selected, textvariable=self.selection_summary, state="readonly").pack(fill="x", padx=10, pady=(0, 10))
 
-        self.quick_box = ttk.LabelFrame(body, text="かんたん調整")
+        self.effect_asset_box = ttk.LabelFrame(body, text="素材")
+        asset_row = ttk.Frame(self.effect_asset_box)
+        asset_row.pack(fill="x", padx=10, pady=(10, 6))
+        ttk.Label(asset_row, textvariable=self.effect_asset_title).pack(side="left")
+        self.effect_asset_button = ttk.Button(asset_row, text="PNG驛｢・ｧ陝ｶ譏ｶ繝ｻ驍ｵ・ｺ繝ｻ・ｶ", command=self._choose_current_effect_asset)
+        self.effect_asset_button.pack(side="right")
+        ttk.Entry(self.effect_asset_box, textvariable=self.effect_asset_path_text, state="readonly").pack(fill="x", padx=10, pady=(0, 6))
+        ttk.Label(self.effect_asset_box, textvariable=self.effect_asset_hint, foreground="#8193a0", justify="left").pack(anchor="w", padx=10, pady=(0, 10))
+
+        self.quick_box = ttk.LabelFrame(body, text="驍ｵ・ｺ闕ｵ譎｢・ｽ骰具ｽｸ・ｺ雋・∞・ｽ鬥ｴ蝮｡繝ｻ・ｿ髫ｰ・ｨ繝ｻ・ｴ")
         self.quick_box.pack(fill="x", pady=(0, 10))
         self.quick_frame = ttk.Frame(self.quick_box)
         self.quick_frame.pack(fill="x", padx=10, pady=10)
 
-        rnd = ttk.LabelFrame(body, text="ランダムと履歴")
+        rnd = ttk.LabelFrame(body, text="驛｢譎｢・ｽ・ｩ驛｢譎｢・ｽ・ｳ驛｢謨鳴驛｢譎｢・｣・ｰ驍ｵ・ｺ繝ｻ・ｨ髯橸ｽｻ繝ｻ・･髮弱・・ｽ・ｴ")
         rnd.pack(fill="x", pady=(0, 10))
         row = ttk.Frame(rnd)
         row.pack(fill="x", padx=10, pady=(10, 6))
-        ttk.Button(row, text="ランダム生成", command=self._on_random_generate).pack(side="left")
-        ttk.OptionMenu(row, self.random_strength, self.random_strength.get(), "弱め", "ふつう", "強め").pack(side="left", padx=8)
+        ttk.Button(row, text="驛｢譎｢・ｽ・ｩ驛｢譎｢・ｽ・ｳ驛｢謨鳴驛｢譎｢・｣・ｰ鬨ｾ蠅難ｽｻ阮吶・", command=self._on_random_generate).pack(side="left")
+        ttk.OptionMenu(row, self.random_strength, self.random_strength.get(), "low", "medium", "high").pack(side="left", padx=8)
         ttk.Button(row, text="Undo", command=self._undo).pack(side="left", padx=(12, 4))
         ttk.Button(row, text="Redo", command=self._redo).pack(side="left")
         lock = ttk.Frame(rnd)
         lock.pack(fill="x", padx=10, pady=(0, 6))
-        ttk.Checkbutton(lock, text="色固定", variable=self.random_lock_color).pack(side="left")
-        ttk.Checkbutton(lock, text="形固定", variable=self.random_lock_shape).pack(side="left", padx=(8, 0))
-        ttk.Checkbutton(lock, text="動き固定", variable=self.random_lock_motion).pack(side="left", padx=(8, 0))
-        ttk.Checkbutton(lock, text="seed固定", variable=self.random_lock_seed).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(lock, text="色を固定", variable=self.random_lock_color).pack(side="left")
+        ttk.Checkbutton(lock, text="形を固定", variable=self.random_lock_shape).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(lock, text="動きを固定", variable=self.random_lock_motion).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(lock, text="seedを固定", variable=self.random_lock_seed).pack(side="left", padx=(8, 0))
         self.history_list = tk.Listbox(rnd, height=6, bg="#121820", fg="#dfe8ef", activestyle="none")
         self.history_list.pack(fill="x", padx=10, pady=(0, 10))
         self.history_list.bind("<<ListboxSelect>>", self._on_history_pick)
 
-        seed = ttk.LabelFrame(body, text="seed と再現性")
+        seed = ttk.LabelFrame(body, text="seed 驍ｵ・ｺ繝ｻ・ｨ髯ｷﾂ陷･・ｲ隶捺ｺｯ・ｫ・､繝ｻ・ｧ")
         seed.pack(fill="x", pady=(0, 10))
         row = ttk.Frame(seed)
         row.pack(fill="x", padx=10, pady=(10, 6))
-        ttk.Checkbutton(row, text="毎回別バリエーション", variable=self.randomize, command=self._on_randomize_toggle).pack(side="left")
+        ttk.Checkbutton(row, text="髮惹ｺ包ｽｸ・ｻ陞ｻ讌｢蟠輔・・･驛｢譎√・・取㏍・ｹ・ｧ繝ｻ・ｨ驛｢譎｢・ｽ・ｼ驛｢・ｧ繝ｻ・ｷ驛｢譎｢・ｽ・ｧ驛｢譎｢・ｽ・ｳ", variable=self.randomize, command=self._on_randomize_toggle).pack(side="left")
         ttk.Label(row, text="base_seed").pack(side="left", padx=(12, 4))
         ttk.Spinbox(row, from_=0, to=2_000_000_000, increment=1, textvariable=self.base_seed, width=12).pack(side="left")
         row2 = ttk.Frame(seed)
@@ -609,25 +635,25 @@ class EffectFactoryApp(tk.Tk):
         ttk.Label(row2, textvariable=self.variant_text, width=6).pack(side="left")
         ttk.Label(row2, text="final_seed").pack(side="left", padx=(8, 0))
         ttk.Entry(row2, textvariable=self.final_seed_text, state="readonly", width=14).pack(side="left", padx=4)
-        ttk.Button(row2, text="コピー", command=self._copy_final_seed).pack(side="left", padx=4)
-        self.btn_next_variant = ttk.Button(row2, text="次の見た目", command=self._next_preview_variant)
+        ttk.Button(row2, text="驛｢・ｧ繝ｻ・ｳ驛｢譎・ｱ堤ｹ晢ｽｻ", command=self._copy_final_seed).pack(side="left", padx=4)
+        self.btn_next_variant = ttk.Button(row2, text="髫ｹ・ｺ繝ｻ・｡驍ｵ・ｺ繝ｻ・ｮ鬮ｫ遨ゑｽｹ譏ｶ陞ｺ鬨ｾ・ｶ繝ｻ・ｮ", command=self._next_preview_variant)
         self.btn_next_variant.pack(side="left", padx=(8, 0))
 
-        help_box = ttk.LabelFrame(body, text="ヘルプ")
+        help_box = ttk.LabelFrame(body, text="ヒント")
         help_box.pack(fill="x", pady=(0, 10))
-        ttk.Label(help_box, text="密度: 粒や模様の数を増減します\nぼかし: 柔らかい印象にします\n速度: 動きの速さです\nループ長: 何秒で自然につながるかを決めます", justify="left").pack(anchor="w", padx=10, pady=10)
+        ttk.Label(help_box, text="左で見た目を選び、右で必要な項目だけ調整します。X / Y / Z で途中の値を記録できます。", justify="left").pack(anchor="w", padx=10, pady=10)
 
     def _build_footer(self, parent):
         foot = ttk.LabelFrame(parent, text="書き出し")
         foot.grid(row=1, column=0, sticky="ew", pady=(10, 0))
 
-        timeline = ttk.LabelFrame(foot, text="変化タイムライン")
+        timeline = ttk.LabelFrame(foot, text="髯樊ｺｽ逕･陜滂ｽｧ驛｢・ｧ繝ｻ・ｿ驛｢・ｧ繝ｻ・､驛｢譎｢・｣・ｰ驛｢譎｢・ｽ・ｩ驛｢・ｧ繝ｻ・､驛｢譎｢・ｽ・ｳ")
         timeline.pack(fill="x", padx=10, pady=(10, 8))
         bar = ttk.Frame(timeline)
         bar.pack(fill="x", padx=10, pady=(10, 4))
-        self.btn_timeline_play = ttk.Button(bar, text="再生", command=self._toggle_timeline_play)
+        self.btn_timeline_play = ttk.Button(bar, text="髯ｷﾂ陷･・ｲ陷・ｽｽ", command=self._toggle_timeline_play)
         self.btn_timeline_play.pack(side="left")
-        self.btn_timeline_home = ttk.Button(bar, text="先頭へ", command=lambda: (self._set_timeline_playing(False), self._set_timeline_position(0.0)))
+        self.btn_timeline_home = ttk.Button(bar, text="髯ｷ閧ｲ・｣・ｯ繝ｻ・ｰ繝ｻ・ｭ驍ｵ・ｺ繝ｻ・ｸ", command=lambda: (self._set_timeline_playing(False), self._set_timeline_position(0.0)))
         self.btn_timeline_home.pack(side="left", padx=(8, 0))
         ttk.Label(bar, textvariable=self.timeline_time_text, width=18).pack(side="left", padx=(12, 8))
         ttk.Label(bar, textvariable=self.timeline_status, foreground="#8fa0ad").pack(side="left")
@@ -637,12 +663,12 @@ class EffectFactoryApp(tk.Tk):
         ttk.Label(marker_row, text="現在位置を保存").pack(side="left")
         self.timeline_marker_buttons = []
         for label in self.TIMELINE_MARKERS:
-            btn = ttk.Button(marker_row, text=f"{label}保存", command=lambda m=label: self._save_timeline_marker(m))
+            btn = ttk.Button(marker_row, text=f"{label} 保存", command=lambda m=label: self._save_timeline_marker(m))
             btn.pack(side="left", padx=(8, 0))
             self.timeline_marker_buttons.append(btn)
-        self.btn_timeline_clear = ttk.Button(marker_row, text="全消去", command=lambda: self._clear_timeline_markers(schedule_history=True))
+        self.btn_timeline_clear = ttk.Button(marker_row, text="全クリア", command=lambda: self._clear_timeline_markers(schedule_history=True))
         self.btn_timeline_clear.pack(side="left", padx=(12, 0))
-        ttk.Label(marker_row, text="マーカーを押すと、その時点のスライダー値を記憶します。", foreground="#7d8d9a").pack(side="left", padx=(12, 0))
+        ttk.Label(marker_row, text="右ドラッグで xx / yy / zz の保持マーカーを作れます。", foreground="#7d8d9a").pack(side="left", padx=(12, 0))
 
         self.timeline_canvas = tk.Canvas(timeline, height=72, bg="#10161d", bd=0, highlightthickness=0, cursor="hand2")
         self.timeline_canvas.pack(fill="x", padx=10, pady=(0, 10))
@@ -653,41 +679,41 @@ class EffectFactoryApp(tk.Tk):
 
         actions = ttk.Frame(foot)
         actions.pack(fill="x", padx=10, pady=(0, 6))
-        self.btn_preview = ttk.Button(actions, text="プレビュー生成", command=self._on_preview)
+        self.btn_preview = ttk.Button(actions, text="驛｢譎丞ｹｲ・取ｨ抵ｽｹ譎∽ｾｭ・守､ｼ・ｹ譎｢・ｽ・ｼ鬨ｾ蠅難ｽｻ阮吶・", command=self._on_preview)
         self.btn_preview.pack(side="left")
-        self.btn_make = ttk.Button(actions, text="本生成", command=self._on_generate)
+        self.btn_make = ttk.Button(actions, text="髫ｴ蟷｢・ｽ・ｬ鬨ｾ蠅難ｽｻ阮吶・", command=self._on_generate)
         self.btn_make.pack(side="left", padx=8)
-        self.btn_gumroad_zip = ttk.Button(actions, text="ZIP作成", command=self._on_make_gumroad_zip)
+        self.btn_gumroad_zip = ttk.Button(actions, text="ZIP髣厄ｽｴ隲帛現繝ｻ", command=self._on_make_gumroad_zip)
         self.btn_gumroad_zip.pack(side="left", padx=8)
-        ttk.Button(actions, text="コマンド表示", command=self._show_cmd_preview).pack(side="left", padx=8)
+        ttk.Button(actions, text="驛｢・ｧ繝ｻ・ｳ驛｢譎・ｽｧ・ｭ・趣ｽｦ驛｢譎∵ｭ薙・・｡繝ｻ・ｨ鬩穂ｼ夲ｽｽ・ｺ", command=self._show_cmd_preview).pack(side="left", padx=8)
         presets = ttk.Frame(foot)
         presets.pack(fill="x", padx=10, pady=(0, 8))
-        ttk.Label(presets, text="おすすめ書き出し").pack(side="left")
+        ttk.Label(presets, text="よく使う書き出し").pack(side="left")
         for label, cfg in [
-            ("軽量プレビュー", {"w": 1280, "h": 720, "fps": 24, "duration": 4.0, "bitrate": "6M"}),
-            ("標準1080p", {"w": 1920, "h": 1080, "fps": 30, "duration": 10.0, "bitrate": "12M"}),
-            ("高品質", {"w": 2560, "h": 1440, "fps": 30, "duration": 10.0, "bitrate": "20M"}),
-            ("Overlay販売向け", {"w": 1920, "h": 1080, "fps": 30, "duration": 10.0, "bitrate": "14M", "file_prefix": "overlay"}),
+            ("鬮ｴ繝ｻ・ｽ・ｽ鬯ｩ・･闕ｳ鄙ｫ繝ｻ驛｢譎｢・ｽ・ｬ驛｢譎∽ｾｭ・守､ｼ・ｹ譎｢・ｽ・ｼ", {"w": 1280, "h": 720, "fps": 24, "duration": 4.0, "bitrate": "6M"}),
+            ("髫ｶ轣倡ｶ懊・・ｺ郢晢ｽｻ080p", {"w": 1920, "h": 1080, "fps": 30, "duration": 10.0, "bitrate": "12M"}),
+            ("鬯ｯ・ｮ闔ｨ諛ｷ繝ｻ鬮ｮ莨夲ｽｽ・ｪ", {"w": 2560, "h": 1440, "fps": 30, "duration": 10.0, "bitrate": "20M"}),
+            ("Overlay鬮ｮ蜈ｷ・ｽ・ｩ髯橸ｽ｢繝ｻ・ｲ髯ｷ・ｷ闔会ｽ｣繝ｻ・ｰ", {"w": 1920, "h": 1080, "fps": 30, "duration": 10.0, "bitrate": "14M", "file_prefix": "overlay"}),
         ]:
             ttk.Button(presets, text=label, command=lambda c=cfg, n=label: self._apply_quick_export(n, c)).pack(side="left", padx=(8, 0))
         settings = ttk.Frame(foot)
         settings.pack(fill="x", padx=10, pady=(0, 8))
         row1 = ttk.Frame(settings)
         row1.pack(fill="x", pady=(0, 6))
-        ttk.Label(row1, text="出力先", width=8).pack(side="left")
+        ttk.Label(row1, text="髯ｷ繝ｻ・ｽ・ｺ髯ｷ迚呻ｽｸ蟶吶・", width=8).pack(side="left")
         ttk.Entry(row1, textvariable=self.output_dir).pack(side="left", fill="x", expand=True, padx=(0, 8))
-        ttk.Label(row1, text="接頭辞").pack(side="left")
+        ttk.Label(row1, text="サイズ").pack(side="left")
         ttk.Entry(row1, textvariable=self.file_prefix, width=14).pack(side="left", padx=(4, 0))
 
         row2 = ttk.Frame(settings)
         row2.pack(fill="x", pady=(0, 6))
-        ttk.Label(row2, text="幅").pack(side="left")
+        ttk.Label(row2, text="FPS").pack(side="left")
         ttk.Spinbox(row2, from_=16, to=8192, increment=16, textvariable=self.w, width=8).pack(side="left", padx=(4, 8))
-        ttk.Label(row2, text="高さ").pack(side="left")
+        ttk.Label(row2, text="秒").pack(side="left")
         ttk.Spinbox(row2, from_=16, to=8192, increment=16, textvariable=self.h, width=8).pack(side="left", padx=(4, 8))
         ttk.Label(row2, text="FPS").pack(side="left")
         ttk.Spinbox(row2, from_=1, to=120, increment=1, textvariable=self.fps, width=6).pack(side="left", padx=(4, 8))
-        ttk.Label(row2, text="秒数").pack(side="left")
+        ttk.Label(row2, text="形式").pack(side="left")
         ttk.Spinbox(row2, from_=1.0, to=120.0, increment=0.5, textvariable=self.duration, width=8).pack(side="left", padx=(4, 8))
         ttk.Checkbutton(row2, text="ループ", variable=self.loop_mode).pack(side="left")
 
@@ -709,9 +735,9 @@ class EffectFactoryApp(tk.Tk):
         wrap.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         bar = ttk.Frame(wrap)
         bar.pack(fill="x")
-        ttk.Button(bar, text="ログ表示 / 非表示", command=self._toggle_log).pack(side="left")
-        ttk.Label(bar, text="普段は閉じたままでも使えます", foreground="#7c8d9a").pack(side="left", padx=10)
-        self.log_box = ttk.LabelFrame(wrap, text="ログ")
+        ttk.Button(bar, text="驛｢譎｢・ｽ・ｭ驛｢・ｧ繝ｻ・ｰ鬮ｯ・ｦ繝ｻ・ｨ鬩穂ｼ夲ｽｽ・ｺ / 鬯ｮ・ｱ隶壹・・ｽ・｡繝ｻ・ｨ鬩穂ｼ夲ｽｽ・ｺ", command=self._toggle_log).pack(side="left")
+        ttk.Label(bar, text="ログは処理の詳細を表示します。", foreground="#7c8d9a").pack(side="left", padx=10)
+        self.log_box = ttk.LabelFrame(wrap, text="驛｢譎｢・ｽ・ｭ驛｢・ｧ繝ｻ・ｰ")
         self.log_box.pack(fill="both", expand=True, pady=(6, 0))
         self.log = tk.Text(self.log_box, height=7, bg="#10161d", fg="#dfe8ef", insertbackground="#ffffff")
         self.log.pack(fill="both", expand=True, padx=10, pady=10)
@@ -728,6 +754,129 @@ class EffectFactoryApp(tk.Tk):
     def _timeline_duration(self) -> float:
         return max(0.1, float(self.duration.get()))
 
+    def _timeline_marker_base_label(self, label: str) -> str:
+        label = str(label or "")
+        for base, hold in self.TIMELINE_HOLD_MARKERS.items():
+            if label == hold:
+                return base
+        return label
+
+    def _timeline_marker_hold_label(self, label: str) -> str:
+        return self.TIMELINE_HOLD_MARKERS.get(self._timeline_marker_base_label(label), "")
+
+    def _timeline_marker_is_hold(self, label: str) -> bool:
+        return str(label or "") in set(self.TIMELINE_HOLD_MARKERS.values())
+
+    def _timeline_marker_order(self):
+        out = []
+        for base in self.TIMELINE_MARKERS:
+            out.append(base)
+            hold = self.TIMELINE_HOLD_MARKERS.get(base)
+            if hold:
+                out.append(hold)
+        return out
+
+    def _timeline_marker_color(self, label: str) -> str:
+        return self.TIMELINE_MARKER_COLORS.get(self._timeline_marker_base_label(label), "#dfe8ef")
+
+    def _timeline_linked_marker_labels(self, label: str):
+        base = self._timeline_marker_base_label(label)
+        hold = self._timeline_marker_hold_label(base)
+        out = [base]
+        if hold:
+            out.append(hold)
+        return out
+
+    def _timeline_marker_min_gap(self) -> float:
+        return 1.0 / float(max(1, int(self.fps.get())))
+
+    def _remove_timeline_hold_marker(self, base_label: str) -> bool:
+        hold_label = self._timeline_marker_hold_label(base_label)
+        if not hold_label or hold_label not in self.timeline_markers:
+            return False
+        self.timeline_markers.pop(hold_label, None)
+        if self.timeline_selected_marker == hold_label:
+            self.timeline_selected_marker = base_label if base_label in self.timeline_markers else None
+        return True
+
+    def _sync_timeline_hold_marker(self, base_label: str) -> bool:
+        base_label = self._timeline_marker_base_label(base_label)
+        base_marker = self.timeline_markers.get(base_label)
+        hold_label = self._timeline_marker_hold_label(base_label)
+        hold_marker = self.timeline_markers.get(hold_label) if hold_label else None
+        if not base_marker or not hold_marker:
+            return False
+        base_time = float(base_marker.get("time_sec", 0.0))
+        hold_time = float(hold_marker.get("time_sec", base_time))
+        if hold_time <= base_time + 1e-6:
+            return self._remove_timeline_hold_marker(base_label)
+        hold_marker["params"] = dict(base_marker.get("params", {}))
+        hold_marker["param_overrides"] = list(base_marker.get("param_overrides", []))
+        return True
+
+    def _timeline_hold_max_time(self, base_label: str) -> float:
+        base_label = self._timeline_marker_base_label(base_label)
+        base_marker = self.timeline_markers.get(base_label)
+        if not base_marker:
+            return self._timeline_duration()
+        base_time = float(base_marker.get("time_sec", 0.0))
+        max_time = self._timeline_duration()
+        min_gap = self._timeline_marker_min_gap()
+        base_index = self.TIMELINE_MARKERS.index(base_label) if base_label in self.TIMELINE_MARKERS else -1
+        if base_index >= 0:
+            for next_label in self.TIMELINE_MARKERS[base_index + 1:]:
+                next_marker = self.timeline_markers.get(next_label)
+                if not next_marker:
+                    continue
+                next_time = float(next_marker.get("time_sec", max_time))
+                if next_time > base_time + 1e-9:
+                    max_time = min(max_time, max(base_time, next_time - min_gap))
+                    break
+        return max(base_time, max_time)
+
+    def _set_timeline_hold_marker_time(self, base_label: str, time_sec: float) -> bool:
+        base_label = self._timeline_marker_base_label(base_label)
+        base_marker = self.timeline_markers.get(base_label)
+        hold_label = self._timeline_marker_hold_label(base_label)
+        if not base_marker or not hold_label:
+            return False
+        base_time = float(base_marker.get("time_sec", 0.0))
+        min_gap = self._timeline_marker_min_gap()
+        target_time = min(self._timeline_hold_max_time(base_label), max(base_time, float(time_sec)))
+        if target_time <= base_time + min_gap * 0.5:
+            return self._remove_timeline_hold_marker(base_label)
+        hold_marker = self.timeline_markers.get(hold_label)
+        if not hold_marker:
+            hold_marker = self._clone_timeline_marker(base_marker)
+            self.timeline_markers[hold_label] = hold_marker
+        changed = (
+            abs(float(hold_marker.get("time_sec", base_time)) - target_time) > 1e-6
+            or hold_marker.get("params") != base_marker.get("params")
+            or list(hold_marker.get("param_overrides", [])) != list(base_marker.get("param_overrides", []))
+        )
+        hold_marker["time_sec"] = float(target_time)
+        hold_marker["params"] = dict(base_marker.get("params", {}))
+        hold_marker["param_overrides"] = list(base_marker.get("param_overrides", []))
+        return changed
+
+    def _drag_timeline_marker(self, label: str, x: float) -> bool:
+        base_label = self._timeline_marker_base_label(label)
+        base_marker = self.timeline_markers.get(base_label)
+        if not base_marker:
+            return False
+        changed = self._set_timeline_hold_marker_time(base_label, self._timeline_x_to_seconds(x))
+        hold_label = self._timeline_marker_hold_label(base_label)
+        active_label = hold_label if hold_label in self.timeline_markers else base_label
+        active_marker = self.timeline_markers.get(active_label, base_marker)
+        active_time = float(active_marker.get("time_sec", base_marker.get("time_sec", 0.0)))
+        self.timeline_selected_marker = active_label
+        if hold_label in self.timeline_markers:
+            self.timeline_status.set(f"驛｢譎・ｽｧ・ｭ郢晢ｽｻ驛｢・ｧ繝ｻ・ｫ驛｢譎｢・ｽ・ｼ{base_label} 驍ｵ・ｺ繝ｻ・ｮ髣厄ｽｫ隴弱・莠憺ｩ搾ｽｨ郢ｧ蟲ｨ笳・{hold_label} 驛｢・ｧ郢晢ｽｻ{self._format_seconds(active_time)} 驍ｵ・ｺ繝ｻ・ｫ鬩募∞・ｽ・ｻ髯ｷ蜥ｲ・ｩ繧托ｽｽ・ｸ繝ｻ・ｭ")
+        else:
+            self.timeline_status.set(f"保持マーカー {base_label} はこれ以上右へ動かせません")
+        self._set_timeline_position(active_time, redraw=False)
+        return changed
+
     def _clone_timeline_marker(self, marker):
         return {
             "time_sec": float(marker.get("time_sec", 0.0)),
@@ -736,9 +885,9 @@ class EffectFactoryApp(tk.Tk):
         }
 
     def _active_timeline_markers(self):
-        order = {label: idx for idx, label in enumerate(self.TIMELINE_MARKERS)}
+        order = {label: idx for idx, label in enumerate(self._timeline_marker_order())}
         out = []
-        for label in self.TIMELINE_MARKERS:
+        for label in self._timeline_marker_order():
             marker = self.timeline_markers.get(label)
             if not marker:
                 continue
@@ -746,7 +895,7 @@ class EffectFactoryApp(tk.Tk):
             item["label"] = label
             item["time_sec"] = min(self._timeline_duration(), max(0.0, float(item["time_sec"])))
             out.append(item)
-        out.sort(key=lambda item: (item["time_sec"], order[item["label"]]))
+        out.sort(key=lambda item: (item["time_sec"], order.get(item["label"], 999)))
         return out
 
     def _sync_preview_runtime_from_ui(self):
@@ -754,10 +903,53 @@ class EffectFactoryApp(tk.Tk):
             self._preview_runtime["playhead_sec"] = float(self.timeline_position.get())
             self._preview_runtime["playing"] = bool(self.timeline_playing)
 
+    def _set_param_var_value(self, key: str, value):
+        if key not in self.param_vars:
+            return
+        pdesc = self.param_desc.get(key, {})
+        ptype = pdesc.get("type", "float")
+        try:
+            if ptype == "int":
+                coerced = int(round(float(value)))
+            elif ptype == "bool":
+                coerced = bool(value)
+            elif ptype == "choice":
+                coerced = str(value)
+            else:
+                coerced = float(value)
+        except Exception:
+            coerced = value
+        try:
+            self.param_vars[key].set(coerced)
+        except Exception:
+            pass
+
+    def _sync_param_ui_to_timeline_position(self):
+        if not self.timeline_markers or not self.param_vars:
+            return
+        plugin = self.plugins.get(self.effect_id.get())
+        if not plugin:
+            return
+        preset = self.presets.get(self.preset_name.get())
+        preset_name = (preset or {}).get("name", "custom")
+        variant = 1 if not self.randomize.get() else int(self.variant.get())
+        current_state = self._build_param_state(preset=preset, preset_name=preset_name, eff_id=plugin.id, variant=variant)
+        timeline_states = self._build_timeline_states(preset=preset, preset_name=preset_name, eff_id=plugin.id, variant=variant)
+        runtime = self._runtime_params_for_time(plugin, current_state, timeline_states, float(self.timeline_position.get()))
+        was_restoring = self._ui_restoring
+        self._ui_restoring = True
+        try:
+            for key in self.param_vars:
+                if key in runtime:
+                    self._set_param_var_value(key, runtime[key])
+        finally:
+            self._ui_restoring = was_restoring
+
     def _set_timeline_position(self, seconds: float, redraw: bool = True):
         seconds = min(self._timeline_duration(), max(0.0, float(seconds)))
         self.timeline_position.set(round(seconds, 4))
         self._sync_preview_runtime_from_ui()
+        self._sync_param_ui_to_timeline_position()
         if redraw:
             self._refresh_timeline_ui()
 
@@ -788,9 +980,10 @@ class EffectFactoryApp(tk.Tk):
         if abs(pos - float(self.timeline_position.get())) > 1e-6:
             self.timeline_position.set(round(pos, 4))
             self._sync_preview_runtime_from_ui()
+            self._sync_param_ui_to_timeline_position()
         self.timeline_time_text.set(f"{self._format_seconds(pos)} / {self._format_seconds(duration)}")
         if hasattr(self, "btn_timeline_play") and self.btn_timeline_play.winfo_exists():
-            self.btn_timeline_play.configure(text=("停止" if self.timeline_playing else "再生"))
+            self.btn_timeline_play.configure(text=("髯句ｸｶ繩ｧ繝ｻ・ｭ繝ｻ・｢" if self.timeline_playing else "髯ｷﾂ陷･・ｲ陷・ｽｽ"))
         if hasattr(self, "timeline_canvas") and self.timeline_canvas.winfo_exists():
             self._draw_timeline()
 
@@ -801,18 +994,33 @@ class EffectFactoryApp(tk.Tk):
         y = 38
         duration = self._timeline_duration()
         playhead_x = self._timeline_seconds_to_x(float(self.timeline_position.get()))
+        selected_base = self._timeline_marker_base_label(self.timeline_selected_marker) if self.timeline_selected_marker else ""
         canvas.create_line(left, y, right, y, fill="#42505e", width=4, capstyle="round")
+        for base_label in self.TIMELINE_MARKERS:
+            hold_label = self._timeline_marker_hold_label(base_label)
+            base_marker = self.timeline_markers.get(base_label)
+            hold_marker = self.timeline_markers.get(hold_label) if hold_label else None
+            if not base_marker or not hold_marker:
+                continue
+            x0 = self._timeline_seconds_to_x(float(base_marker.get("time_sec", 0.0)))
+            x1 = self._timeline_seconds_to_x(float(hold_marker.get("time_sec", 0.0)))
+            if x1 > x0 + 1e-3:
+                canvas.create_line(x0, y, x1, y, fill=self._timeline_marker_color(base_label), width=(6 if selected_base == base_label else 4), capstyle="round")
         canvas.create_line(left, y, playhead_x, y, fill="#86c5ff", width=4, capstyle="round")
         canvas.create_line(playhead_x, y - 18, playhead_x, y + 18, fill="#f2f6fb", width=2)
         canvas.create_oval(playhead_x - 5, y - 5, playhead_x + 5, y + 5, fill="#f2f6fb", outline="")
         for item in self._active_timeline_markers():
             mx = self._timeline_seconds_to_x(item["time_sec"])
-            color = self.TIMELINE_MARKER_COLORS.get(item["label"], "#dfe8ef")
-            selected = item["label"] == self.timeline_selected_marker
+            color = self._timeline_marker_color(item["label"])
+            is_hold = self._timeline_marker_is_hold(item["label"])
+            selected = bool(selected_base) and self._timeline_marker_base_label(item["label"]) == selected_base
             outline = "#f7fbff" if selected else "#10161d"
             text_color = "#10161d" if selected else "#f7fbff"
-            canvas.create_polygon(mx, y - 14, mx + 11, y, mx, y + 14, mx - 11, y, fill=color, outline=outline, width=(2 if selected else 1))
-            canvas.create_text(mx, y, text=item["label"], fill=text_color, font=("", 10, "bold"))
+            half_w = 9 if is_hold else 11
+            half_h = 12 if is_hold else 14
+            font_size = 9 if is_hold else 10
+            canvas.create_polygon(mx, y - half_h, mx + half_w, y, mx, y + half_h, mx - half_w, y, fill=color, outline=outline, width=(2 if selected else 1))
+            canvas.create_text(mx, y, text=item["label"], fill=text_color, font=("", font_size, "bold"))
             canvas.create_text(mx, y - 22, text=self._format_seconds(item["time_sec"]), fill=color, font=("", 9))
         canvas.create_text(left, y + 24, text="0s", anchor="w", fill="#8fa0ad", font=("", 9))
         canvas.create_text(right, y + 24, text=self._format_seconds(duration), anchor="e", fill="#8fa0ad", font=("", 9))
@@ -830,24 +1038,39 @@ class EffectFactoryApp(tk.Tk):
             return
         self._set_timeline_playing(False)
         self._timeline_dragging = True
+        self._timeline_drag_dirty = False
         hit = self._find_timeline_marker_hit(evt.x, evt.y)
+        self._timeline_drag_marker_label = hit
         if hit:
             self._select_timeline_marker(hit, apply_snapshot=True, move_playhead=True)
             return
         self.timeline_selected_marker = None
-        self.timeline_status.set("再生位置を移動しました")
+        self.timeline_status.set("タイムラインの外側です")
         self._set_timeline_position(self._timeline_x_to_seconds(evt.x))
 
     def _on_timeline_drag(self, evt):
         if self.busy or not self._timeline_dragging:
             return
+        if self._timeline_drag_marker_label:
+            changed = self._drag_timeline_marker(self._timeline_drag_marker_label, evt.x)
+            if changed:
+                self._timeline_drag_dirty = True
+                self._request_preview_rebuild()
+            self._refresh_timeline_ui()
+            return
         self.timeline_selected_marker = None
-        self.timeline_status.set("再生位置をスクラブ中です")
+        self.timeline_status.set("タイムライン位置を更新しました")
         self._set_timeline_position(self._timeline_x_to_seconds(evt.x))
 
     def _on_timeline_release(self, _evt):
+        marker_dragged = bool(self._timeline_drag_marker_label) and self._timeline_drag_dirty
         self._timeline_dragging = False
+        self._timeline_drag_marker_label = None
+        self._timeline_drag_dirty = False
         self._refresh_timeline_ui()
+        if marker_dragged:
+            self._schedule_history("edit")
+            self._request_preview_rebuild(immediate=True)
 
     def _set_timeline_playing(self, playing: bool):
         playing = bool(playing) and bool(self.live_preview.get()) and not self.busy
@@ -896,8 +1119,9 @@ class EffectFactoryApp(tk.Tk):
             "params": self._collect_fixed_params(),
             "param_overrides": sorted(self.param_overrides),
         }
+        self._sync_timeline_hold_marker(label)
         self.timeline_selected_marker = label
-        self.timeline_status.set(f"マーカー{label} を {self._format_seconds(self.timeline_markers[label]['time_sec'])} に保存しました")
+        self.timeline_status.set(f"マーカー {label} を {self._format_seconds(self.timeline_markers[label]['time_sec'])} に保存しました")
         self._refresh_timeline_ui()
         self._schedule_history("edit")
         self._request_preview_rebuild(immediate=True)
@@ -906,7 +1130,9 @@ class EffectFactoryApp(tk.Tk):
         had_markers = bool(self.timeline_markers)
         self.timeline_markers = {}
         self.timeline_selected_marker = None
-        self.timeline_status.set(message or "X / Y / Z に現在の見た目を保存できます")
+        self._timeline_drag_marker_label = None
+        self._timeline_drag_dirty = False
+        self.timeline_status.set(message or "X / Y / Z に現在位置の値を保存できます")
         self._refresh_timeline_ui()
         if had_markers:
             if schedule_history:
@@ -936,7 +1162,7 @@ class EffectFactoryApp(tk.Tk):
             self._set_timeline_position(float(marker.get("time_sec", 0.0)), redraw=False)
         if apply_snapshot:
             self._apply_timeline_marker_to_ui(label)
-        self.timeline_status.set(f"マーカー{label} を編集中 ({self._format_seconds(marker.get('time_sec', 0.0))})")
+        self.timeline_status.set(f"驛｢譎・ｽｧ・ｭ郢晢ｽｻ驛｢・ｧ繝ｻ・ｫ驛｢譎｢・ｽ・ｼ{label} 驛｢・ｧ陜｣・､繝ｻ・ｷ繝ｻ・ｨ鬯ｮ・ｮ郢晢ｽｻ繝ｻ・ｸ繝ｻ・ｭ ({self._format_seconds(marker.get('time_sec', 0.0))})")
         self._refresh_timeline_ui()
         self._request_preview_rebuild(immediate=True)
 
@@ -944,10 +1170,18 @@ class EffectFactoryApp(tk.Tk):
         label = self.timeline_selected_marker
         if self._ui_restoring or not label or label not in self.timeline_markers:
             return
-        marker = self.timeline_markers[label]
-        marker["params"] = self._collect_fixed_params()
-        marker["param_overrides"] = sorted(self.param_overrides)
-        self.timeline_status.set(f"マーカー{label} を更新中 ({self._format_seconds(marker['time_sec'])})")
+        params = self._collect_fixed_params()
+        overrides = sorted(self.param_overrides)
+        for linked_label in self._timeline_linked_marker_labels(label):
+            marker = self.timeline_markers.get(linked_label)
+            if not marker:
+                continue
+            marker["params"] = dict(params)
+            marker["param_overrides"] = list(overrides)
+        self._sync_timeline_hold_marker(label)
+        marker = self.timeline_markers.get(label)
+        if marker:
+            self.timeline_status.set(f"驛｢譎・ｽｧ・ｭ郢晢ｽｻ驛｢・ｧ繝ｻ・ｫ驛｢譎｢・ｽ・ｼ{label} 驛｢・ｧ陷ｻ莠･・ｳ・ｩ髫ｴ繝ｻ・ｽ・ｰ髣包ｽｳ繝ｻ・ｭ ({self._format_seconds(marker['time_sec'])})")
         self._refresh_timeline_ui()
 
     def _toggle_log(self, force=None):
@@ -1012,7 +1246,7 @@ class EffectFactoryApp(tk.Tk):
             text = " ".join([item["title"], item["plugin_name"], item["category"], item["usage"]]).lower()
             if q and q not in text:
                 continue
-            if f != "すべて" and f not in [item["category"], item["usage"]]:
+            if f != "驍ｵ・ｺ陷ｷ・ｶ遶冗距・ｸ・ｺ繝ｻ・ｦ" and f not in [item["category"], item["usage"]]:
                 continue
             row, col = divmod(index, self.GALLERY_COLUMNS)
             card = tk.Frame(self.gallery_grid, bg="#121820", bd=0, highlightthickness=0)
@@ -1084,6 +1318,7 @@ class EffectFactoryApp(tk.Tk):
         plugin = self.plugins[item["effect_id"]]
         w, h, frames = 320, 180, 20
         params = {p["key"]: p.get("default") for p in plugin.params}
+        params.update(self._effect_runtime_extras(plugin.id))
         seed = 12345
         if preset:
             rng = np.random.default_rng(_hash_seed(preset.get("random", {}).get("base_seed", 12345), preset["name"], plugin.id, "thumb"))
@@ -1121,7 +1356,9 @@ class EffectFactoryApp(tk.Tk):
             self.param_overrides.clear()
             self._rebuild_param_ui()
             self._update_selection_labels()
-            self._clear_timeline_markers(message="見た目変更に合わせてタイムラインを初期化しました", request_preview=False, schedule_history=False)
+            self._clear_timeline_markers(message="選択変更に合わせてタイムラインを初期化しました", request_preview=False, schedule_history=False)
+            if self._effect_asset_spec(item["effect_id"]):
+                self._choose_effect_asset(item["effect_id"], force_dialog=(not bool(self._effect_asset_path(item["effect_id"]))))
             self._request_preview_rebuild()
         self._refresh_gallery_selection()
         self._schedule_history("select")
@@ -1141,18 +1378,19 @@ class EffectFactoryApp(tk.Tk):
         plugin = self.plugins[self.effect_id.get()]
         category = _effect_category(plugin.id, plugin.name)
         usage = _effect_usage(plugin.id, plugin.name)
-        self.selected_title.configure(text=(preset.get("name") if preset else plugin.name))
-        self.selected_meta.configure(text=f"{category} / {usage} / effect: {plugin.name}")
-        summary_parts = [
-            f"preset={preset.get('name') if preset else '(none)'}",
-            f"effect_id={plugin.id}",
-            f"effect_name={plugin.name}",
-            f"category={category}",
-            f"usage={usage}",
-            "params=" + ", ".join(p["key"] for p in plugin.params),
-        ]
-        self.selection_summary.set(" | ".join(summary_parts))
-        self.preview_info.set(f"{plugin.name} を表示中。下のタイムラインで X / Y / Z に変化も記憶できます。")
+        asset_path = self._effect_asset_path(plugin.id)
+        selected_name = preset.get("name") if preset else plugin.name
+        self.selected_title.configure(text=selected_name)
+        meta_text = f"{category} / {usage} / effect: {plugin.name}"
+        if asset_path:
+            meta_text += f" / PNG: {os.path.basename(asset_path)}"
+        self.selected_meta.configure(text=meta_text)
+        self.selection_summary.set(selected_name)
+        preview_text = f"{plugin.name} 繧定｡ｨ遉ｺ荳ｭ縲ゆｸ九・繧ｿ繧､繝繝ｩ繧､繝ｳ縺ｧ X / Y / Z 縺ｫ險俶・縺ｧ縺阪∪縺吶・
+        if self._effect_asset_spec(plugin.id):
+            preview_text += " 蠢・ｦ√↑繧牙承蛛ｴ縺ｧ騾城℃PNG繧帝∈縺ｹ縺ｾ縺吶・
+        self.preview_info.set(preview_text)
+        self._refresh_effect_asset_ui()
 
     def _copy_selection_summary(self):
         try:
@@ -1237,20 +1475,20 @@ class EffectFactoryApp(tk.Tk):
             if self.timeline_selected_marker and self.timeline_selected_marker in self.timeline_markers:
                 self._sync_selected_marker_from_ui()
             elif self.timeline_markers:
-                self.timeline_status.set("未保存の調整です。必要なら X / Y / Z で現在位置へ記憶してください")
+                self.timeline_status.set("未保存の調整です。必要なら X / Y / Z で現在位置へ記録してください")
                 self._refresh_timeline_ui()
         self._on_ui_value_changed()
 
     def _quick_specs(self, plugin):
         defs = [
-            ("density", "密度", "粒や模様の数を増減します", ["density", "count", "strength", "intensity"]),
-            ("size", "サイズ", "要素の大きさや太さです", ["width", "size_max", "size_min"]),
-            ("length", "長さ", "光の棒の長さです", ["length"]),
-            ("speed", "速度", "動きの速さです", ["speed", "sweep"]),
-            ("direction", "向き", "動きの向きを回転します", ["motion_direction"]),
-            ("blur", "ぼかし", "柔らかい印象にします", ["blur", "blur_far", "blur_mid", "blur_near"]),
-            ("brightness", "明るさ", "全体の光り方を調整します", ["brightness", "glow_strength", "glow", "strength"]),
-            ("random", "ランダム感", "揺らぎやノイズの量です", ["twinkle", "flicker", "noise", "scanlines", "grain"]),
+            ("density", "密度", "粒や模様の量を調整します", ["density", "count", "strength", "intensity"]),
+            ("size", "サイズ", "要素の大きさや太さを調整します", ["width", "size_max", "size_min"]),
+            ("length", "鬯ｮ貊ゑｽｽ・ｷ驍ｵ・ｺ郢晢ｽｻ, "髯ｷ莠･・ｳ・ｨ郢晢ｽｻ髫ｴ・ｽ陋幢ｽｵ郢晢ｽｻ鬯ｮ貊ゑｽｽ・ｷ驍ｵ・ｺ髴域鱒ﾂ蝣､・ｸ・ｺ郢晢ｽｻ, ["length"]),
+            ("speed", "速度", "動きの速さを調整します", ["speed", "sweep"]),
+            ("direction", "向き", "動きの向きを調整します", ["motion_direction"]),
+            ("blur", "ぼかし", "柔らかさを調整します", ["blur", "blur_far", "blur_mid", "blur_near"]),
+            ("brightness", "髫ｴ荳橸ｽｼ・ｱ繝ｻ迢暦ｽｸ・ｺ郢晢ｽｻ, "髯ｷ闌ｨ・ｽ・ｨ髣厄ｽｴ髦ｮ蜷ｶ繝ｻ髯ｷ莠･・ｳ・ｨ繝ｻ鬘假ｽｭ繝ｻ・ｽ・ｹ驛｢・ｧ陞ｳ螟ｲ・ｽ・ｪ繝ｻ・ｿ髫ｰ・ｨ繝ｻ・ｴ驍ｵ・ｺ陷会ｽｱ遶擾ｽｪ驍ｵ・ｺ郢晢ｽｻ, ["brightness", "glow_strength", "glow", "strength"]),
+            ("random", "驛｢譎｢・ｽ・ｩ驛｢譎｢・ｽ・ｳ驛｢謨鳴驛｢譎｢・｣・ｰ髫ｲ・｢郢晢ｽｻ, "髫ｰ・ｰ繝ｻ・ｺ驛｢・ｧ陝ｲ・ｨ驍・・・ｹ・ｧ郢晢ｽｻ郢晢ｽｮ驛｢・ｧ繝ｻ・､驛｢・ｧ繝ｻ・ｺ驍ｵ・ｺ繝ｻ・ｮ鬯ｩ・･闕ｳ鄙ｫﾂ蝣､・ｸ・ｺ郢晢ｽｻ, ["twinkle", "flicker", "noise", "scanlines", "grain"]),
             ("color", "色味", "色の印象を切り替えます", ["color", "tint", "palette", "tint_r"]),
         ]
         used, out = set(), []
@@ -1260,7 +1498,7 @@ class EffectFactoryApp(tk.Tk):
                 continue
             out.append({"id": cid, "label": label, "help": help_text, "keys": match})
             used.update(match)
-        out.append({"id": "loop_length", "label": "ループ長", "help": "何秒で自然につながるかを決めます", "duration": True})
+        out.append({"id": "loop_length", "label": "驛｢譎｢・ｽ・ｫ驛｢譎｢・ｽ・ｼ驛｢譎樊味髢ｨ繝ｻ, "help": "髣厄ｽｴ隲ｷ蛹・ｽｽ・ｧ陋幢ｽｵ邵ｲ蟶晄・繝ｻ・ｪ髴取ｻゑｽｽ・ｶ驍ｵ・ｺ繝ｻ・ｫ驍ｵ・ｺ繝ｻ・､驍ｵ・ｺ繝ｻ・ｪ驍ｵ・ｺ陟暮ｯ会ｽｽ迢暦ｽｸ・ｺ闕ｵ譎｢・ｽ螳夲ｽｱ雜｣・ｽ・ｺ驛｢・ｧ遶丞｣ｺ遨宣し・ｺ郢晢ｽｻ, "duration": True})
         return out[:9]
 
     def _build_quick_controls(self, plugin):
@@ -1380,9 +1618,9 @@ class EffectFactoryApp(tk.Tk):
     def _pretty_label(self, p):
         return {
             "brightness": "明るさ", "speed": "速度", "grain": "グレイン", "glow": "グロー",
-            "glow_strength": "グロー強さ", "glow_radius": "グロー広がり", "mblur_samples": "モーションブラー",
-            "layers": "奥行きレイヤ数", "blur_far": "遠景ぼけ", "blur_mid": "中景ぼけ", "blur_near": "近景ぼけ",
-            "drift_x_cycles": "横移動", "drift_y_cycles": "縦移動", "size_min": "最小サイズ", "size_max": "最大サイズ",
+            "glow_strength": "驛｢・ｧ繝ｻ・ｰ驛｢譎｢・ｽ・ｭ驛｢譎｢・ｽ・ｼ髯滓汚・ｽ・ｷ驍ｵ・ｺ郢晢ｽｻ, "glow_radius": "驛｢・ｧ繝ｻ・ｰ驛｢譎｢・ｽ・ｭ驛｢譎｢・ｽ・ｼ髯溷ｼｱ繝ｻ遯ｶ・ｲ驛｢・ｧ郢晢ｽｻ, "mblur_samples": "驛｢譎｢・ｽ・｢驛｢譎｢・ｽ・ｼ驛｢・ｧ繝ｻ・ｷ驛｢譎｢・ｽ・ｧ驛｢譎｢・ｽ・ｳ驛｢譎・§・主ｸｷ・ｹ譎｢・ｽ・ｼ",
+            "layers": "レイヤ数", "blur_far": "遠景ぼかし", "blur_mid": "中景ぼかし", "blur_near": "近景ぼかし",
+            "drift_x_cycles": "髫ｶ髮｣・ｽ・ｪ鬩募∞・ｽ・ｻ髯ｷ髦ｪ繝ｻ, "drift_y_cycles": "鬩搾ｽｵ繝ｻ・ｦ鬩募∞・ｽ・ｻ髯ｷ髦ｪ繝ｻ, "size_min": "髫ｴ蟠｢ﾂ髯昴・・ｸ鄙ｫ・驛｢・ｧ繝ｻ・､驛｢・ｧ繝ｻ・ｺ", "size_max": "髫ｴ蟠｢ﾂ髯樊ｻゑｽｽ・ｧ驛｢・ｧ繝ｻ・ｵ驛｢・ｧ繝ｻ・､驛｢・ｧ繝ｻ・ｺ",
             "count": "数", "density": "密度", "palette": "色プリセット", "tint": "色味", "length": "長さ", "motion_direction": "動きの向き"
         }.get(p["key"], p.get("label", p["key"]))
 
@@ -1410,6 +1648,7 @@ class EffectFactoryApp(tk.Tk):
             "random": {"base_seed": int(self.base_seed.get()), "randomize": bool(self.randomize.get()), "variant": int(self.variant.get())},
             "params": {k: v.get() for k, v in self.param_vars.items()},
             "param_overrides": sorted(self.param_overrides),
+            "effect_assets": dict(self.effect_asset_paths),
             "timeline": {
                 "position": float(self.timeline_position.get()),
                 "selected_marker": self.timeline_selected_marker or "",
@@ -1433,7 +1672,7 @@ class EffectFactoryApp(tk.Tk):
         sig = json.dumps(snap, sort_keys=True, ensure_ascii=True, default=str)
         if sig == self._history_sig:
             return
-        labels = {"initial": "初期状態", "preset": "プリセット変更", "select": "見た目選択", "edit": "調整", "random": "ランダム生成", "export": "書き出しプリセット", "before_select": "選択前"}
+        labels = {"initial": "初期状態", "preset": "プリセット変更", "select": "選択", "edit": "調整", "random": "ランダム生成", "export": "書き出し", "before_select": "選択前"}
         title = snap["preset_name"] if snap["preset_name"] in self.presets else snap["effect_id"]
         item = {"label": f"{labels.get(reason, reason)}: {title}", "state": snap}
         if self._history_index < len(self._history) - 1:
@@ -1448,7 +1687,7 @@ class EffectFactoryApp(tk.Tk):
     def _refresh_history_list(self):
         self.history_list.delete(0, "end")
         for i, item in enumerate(self._history):
-            self.history_list.insert("end", ("● " if i == self._history_index else "  ") + item["label"])
+            self.history_list.insert("end", ("髫ｨ・ｳ郢晢ｽｻ" if i == self._history_index else "  ") + item["label"])
         if self._history:
             self.history_list.selection_clear(0, "end")
             self.history_list.selection_set(self._history_index)
@@ -1471,6 +1710,7 @@ class EffectFactoryApp(tk.Tk):
             self.base_seed.set(int(rnd["base_seed"])); self.randomize.set(bool(rnd["randomize"])); self.variant.set(int(rnd["variant"])); self.variant_text.set(str(int(rnd["variant"])))
             self._apply_preset(self.presets.get(self.preset_name.get()))
             self.param_overrides = set(snap.get("param_overrides", []))
+            self.effect_asset_paths = {str(key): str(value) for key, value in (snap.get("effect_assets") or {}).items() if value}
             self._rebuild_param_ui()
             for key, value in snap["params"].items():
                 if key in self.param_vars:
@@ -1538,7 +1778,7 @@ class EffectFactoryApp(tk.Tk):
     def _on_random_generate(self):
         self._push_history("random")
         rng = np.random.default_rng(int(time.time() * 1000) & 0x7FFFFFFF)
-        ratio = {"弱め": 0.18, "ふつう": 0.33, "強め": 0.52}.get(self.random_strength.get(), 0.33)
+        ratio = {"low": 0.18, "medium": 0.33, "high": 0.52}.get(self.random_strength.get(), 0.33)
         groups = {
             "color": {"color", "tint", "palette", "tint_r", "tint_g", "tint_b", "nebula_r", "nebula_g", "nebula_b"},
             "shape": {"count", "density", "size_min", "size_max", "width", "length", "layers", "shooting_stars"},
@@ -1628,19 +1868,112 @@ class EffectFactoryApp(tk.Tk):
     def _collect_fixed_params(self):
         return {key: var.get() for key, var in self.param_vars.items()}
 
-    def _resolve_params_for_state(self, plugin, preset, fixed_params, param_overrides, rng: np.random.Generator):
+    def _effect_asset_spec(self, eff_id: str = None):
+        return self.EFFECT_ASSET_SPECS.get((eff_id or self.effect_id.get()))
+
+    def _effect_asset_path(self, eff_id: str = None) -> str:
+        return str(self.effect_asset_paths.get((eff_id or self.effect_id.get()), "") or "")
+
+    def _effect_runtime_extras(self, eff_id: str) -> dict:
+        spec = self._effect_asset_spec(eff_id)
+        if not spec:
+            return {}
+        path = self._effect_asset_path(eff_id).strip()
+        if not path:
+            return {}
+        return {spec["runtime_key"]: path}
+
+    def _refresh_effect_asset_ui(self):
+        if not hasattr(self, "effect_asset_box"):
+            return
+        spec = self._effect_asset_spec()
+        if not spec:
+            try:
+                self.effect_asset_box.pack_forget()
+            except Exception:
+                pass
+            return
+        path = self._effect_asset_path()
+        self.effect_asset_title.set(f"{spec['label']}: {os.path.basename(path) if path else '髫ｴ蟷｢・ｽ・ｪ鬯ｩ蛹・ｽｽ・ｸ髫ｰ螢ｹ繝ｻ}")
+        self.effect_asset_path_text.set(path or "未選択。右のボタンから選べます")
+        self.effect_asset_hint.set(spec["hint"])
+        self.effect_asset_button.configure(text=spec["button"])
+        self.effect_asset_box.pack_forget()
+        self.effect_asset_box.pack(fill="x", pady=(0, 10), before=self.quick_box)
+
+    def _thumb_item_for_effect(self, eff_id: str):
+        plugin = self.plugins.get(eff_id)
+        if not plugin:
+            return None
+        return {
+            "kind": "effect",
+            "id": eff_id,
+            "title": plugin.name,
+            "effect_id": eff_id,
+            "plugin_name": plugin.name,
+            "category": _effect_category(eff_id, plugin.name),
+            "usage": _effect_usage(eff_id, plugin.name),
+        }
+
+    def _refresh_effect_thumb(self, eff_id: str):
+        item = self._thumb_item_for_effect(eff_id)
+        if not item:
+            return
+        self.thumb_cache.pop(("effect", eff_id), None)
+        self._queue_thumb(item)
+
+    def _choose_current_effect_asset(self):
+        self._choose_effect_asset(self.effect_id.get(), force_dialog=True)
+
+    def _choose_effect_asset(self, eff_id: str, force_dialog: bool = True):
+        spec = self._effect_asset_spec(eff_id)
+        if not spec:
+            return ""
+        existing = self._effect_asset_path(eff_id)
+        if force_dialog or not existing:
+            dialog_kwargs = {
+                "title": spec["dialog_title"],
+                "filetypes": spec.get("filetypes") or [("PNG", "*.png")],
+            }
+            initialdir = ""
+            if existing and os.path.isfile(existing):
+                initialdir = os.path.dirname(existing)
+            elif self.output_dir.get().strip():
+                initialdir = self.output_dir.get().strip()
+            if initialdir:
+                dialog_kwargs["initialdir"] = initialdir
+            chosen = filedialog.askopenfilename(**dialog_kwargs)
+        else:
+            chosen = existing
+        if not chosen:
+            self._refresh_effect_asset_ui()
+            return existing
+        if os.path.abspath(chosen) == os.path.abspath(existing or ""):
+            self._refresh_effect_asset_ui()
+            return chosen
+        self.effect_asset_paths[eff_id] = chosen
+        self._refresh_effect_asset_ui()
+        self._update_selection_labels()
+        self._refresh_effect_thumb(eff_id)
+        self._schedule_history("edit")
+        self._request_preview_rebuild(immediate=True)
+        return chosen
+
+    def _resolve_params_for_state(self, plugin, preset, fixed_params, param_overrides, seed_base: int):
         ranges = (preset or {}).get("params", {})
         overrides = set(param_overrides)
+        seed_base = int(seed_base)
         out = {}
         for p in plugin.params:
             key = p["key"]
             spec = None if key in overrides else ranges.get(key)
-            out[key] = resolve_value(rng, spec, fixed_params.get(key, p.get("default")), pdesc=p)
+            param_rng = np.random.default_rng(_hash_seed(seed_base, key))
+            out[key] = resolve_value(param_rng, spec, fixed_params.get(key, p.get("default")), pdesc=p)
         return out
 
-    def _resolve_params_for_run(self, preset, rng: np.random.Generator):
+    def _resolve_params_for_run(self, preset, seed_base: int):
         plugin = self.plugins[self.effect_id.get()]
-        return self._resolve_params_for_state(plugin, preset, self._collect_fixed_params(), self.param_overrides, rng)
+        return self._resolve_params_for_state(plugin, preset, self._collect_fixed_params(), self.param_overrides, seed_base)
 
     def _build_param_state(self, preset, preset_name: str, eff_id: str, variant: int, fixed_params=None, param_overrides=None, label: str = None, time_sec: float = None):
         plugin = self.plugins[eff_id]
@@ -1651,11 +1984,11 @@ class EffectFactoryApp(tk.Tk):
         out_fps = int(self.fps.get())
         out_frames = max(2, int(round(out_fps * float(self.duration.get()))))
         params_seed = _hash_seed(base_seed, int(variant), preset_name, eff_id, "params")
-        rng = np.random.default_rng(params_seed)
-        resolved_params = self._resolve_params_for_state(plugin, preset, fixed, overrides, rng)
+        resolved_params = self._resolve_params_for_state(plugin, preset, fixed, overrides, params_seed)
         param_blob = json.dumps(resolved_params, sort_keys=True, ensure_ascii=True)
         final_seed = _hash_seed(base_seed, int(variant), preset_name, eff_id, out_w, out_h, out_fps, out_frames, param_blob)
         runtime = dict(resolved_params)
+        runtime.update(self._effect_runtime_extras(eff_id))
         runtime["__loop__"] = bool(self.loop_mode.get())
         runtime["__frames__"] = int(out_frames)
         runtime["__fps__"] = int(out_fps)
@@ -1797,6 +2130,7 @@ class EffectFactoryApp(tk.Tk):
         return plugin.render_frame(cache, max(0, int(frame_i)))
 
     def _timeline_meta(self, current_state, timeline_states):
+        current_runtime = current_state.get("runtime", {})
         return {
             "mode": ("marker_animation" if timeline_states else "single_state"),
             "markers": [
@@ -1809,6 +2143,11 @@ class EffectFactoryApp(tk.Tk):
                 for state in timeline_states
             ],
             "current_params": current_state["resolved_params"],
+            "effect_assets": {
+                key: value
+                for key, value in current_runtime.items()
+                if key.endswith("_path") and isinstance(value, str) and value
+            },
         }
 
     def _make_outputs(self, preset_name: str, effect_id: str, w: int, h: int, fps: int, outdir: str, suffix: str = ""):
@@ -1829,7 +2168,7 @@ class EffectFactoryApp(tk.Tk):
             self._log(" ".join([f'"{c}"' if " " in c else c for c in cmd]))
             self._log("----------------------------------\n")
         except Exception as e:
-            messagebox.showerror("エラー", str(e))
+            messagebox.showerror("驛｢・ｧ繝ｻ・ｨ驛｢譎｢・ｽ・ｩ驛｢譎｢・ｽ・ｼ", str(e))
 
     def _set_busy(self, busy: bool):
         self.busy = busy
@@ -1861,7 +2200,7 @@ class EffectFactoryApp(tk.Tk):
 
     def create_gumroad_zip(self, mp4_path: str) -> str:
         if not mp4_path or not os.path.isfile(mp4_path):
-            raise FileNotFoundError("MP4 が見つかりません。先に本生成してください。")
+            raise FileNotFoundError("MP4 が見つかりません。先に書き出しを実行してください。")
         outdir = os.path.dirname(mp4_path)
         base = os.path.splitext(os.path.basename(mp4_path))[0]
         zip_path = os.path.join(outdir, f"{base}__gumroad.zip")
@@ -1876,14 +2215,14 @@ class EffectFactoryApp(tk.Tk):
     def _on_make_gumroad_zip(self):
         mp4_path = self.last_export_mp4
         if not mp4_path:
-            messagebox.showerror("エラー", "先に本生成してください。")
+            messagebox.showerror("Error", "先に書き出しを実行してください。")
             return
         try:
             zip_path = self.create_gumroad_zip(mp4_path)
-            messagebox.showinfo("完了", f"Gumroad 用 ZIP を作成しました\n{zip_path}")
+            messagebox.showinfo("Info", f"Gumroad 用 ZIP を書き出しました\n{zip_path}")
             self._log(f"[GUMROAD] ZIP created: {zip_path}")
         except Exception as e:
-            messagebox.showerror("エラー", str(e))
+            messagebox.showerror("驛｢・ｧ繝ｻ・ｨ驛｢譎｢・ｽ・ｩ驛｢譎｢・ｽ・ｼ", str(e))
 
     def _on_preview(self):
         if self.busy:
@@ -1892,12 +2231,12 @@ class EffectFactoryApp(tk.Tk):
             outdir = self.output_dir.get().strip(); _ensure_dir(outdir)
             ffmpeg = self.ffmpeg_path.get().strip()
             if not ffmpeg:
-                raise ValueError("ffmpeg を指定してください。")
+                raise ValueError("ffmpeg を開始できませんでした。")
             self._set_busy(True); self.pbar["value"] = 0
             threading.Thread(target=self._worker_preview, daemon=True).start()
         except Exception as e:
             self._set_busy(False)
-            messagebox.showerror("エラー", str(e))
+            messagebox.showerror("驛｢・ｧ繝ｻ・ｨ驛｢譎｢・ｽ・ｩ驛｢譎｢・ｽ・ｼ", str(e))
 
     def _on_generate(self):
         if self.busy:
@@ -1906,15 +2245,15 @@ class EffectFactoryApp(tk.Tk):
             outdir = self.output_dir.get().strip(); _ensure_dir(outdir)
             ffmpeg = self.ffmpeg_path.get().strip()
             if not ffmpeg:
-                raise ValueError("ffmpeg を指定してください。")
+                raise ValueError("ffmpeg を開始できませんでした。")
             frames = int(round(int(self.fps.get()) * float(self.duration.get())))
             if frames < 2:
-                raise ValueError("秒数が短すぎます。")
+                raise ValueError("出力先が空です。")
             self._set_busy(True); self.pbar["value"] = 0
             threading.Thread(target=self._worker_generate, daemon=True).start()
         except Exception as e:
             self._set_busy(False)
-            messagebox.showerror("エラー", str(e))
+            messagebox.showerror("驛｢・ｧ繝ｻ・ｨ驛｢譎｢・ｽ・ｩ驛｢譎｢・ｽ・ｼ", str(e))
 
     def _calc_seed_and_params(self, variant: int, preset_name: str, eff_id: str, preset):
         state = self._build_param_state(preset=preset, preset_name=preset_name, eff_id=eff_id, variant=variant)
@@ -1951,7 +2290,7 @@ class EffectFactoryApp(tk.Tk):
                 self.after_cancel(self._preview_rebuild_after_id)
             except Exception:
                 pass
-        self._set_preview_loading(True, "プレビュー更新中...")
+        self._set_preview_loading(True, "驛｢譎丞ｹｲ・取ｨ抵ｽｹ譎∽ｾｭ・守､ｼ・ｹ譎｢・ｽ・ｼ髫ｴ蜴・ｽｽ・ｴ髫ｴ繝ｻ・ｽ・ｰ髣包ｽｳ繝ｻ・ｭ...")
         if immediate:
             self._preview_take_snapshot_and_signal()
         else:
@@ -2004,7 +2343,7 @@ class EffectFactoryApp(tk.Tk):
             outdir = self.output_dir.get().strip(); _ensure_dir(outdir)
             self._sync_variant_from_state()
             if not self.randomize.get():
-                self.msgq.put(("log", "[RANDOM] OFF 中はバリエーション送りできません。"))
+                self.msgq.put(("log", "[RANDOM] OFF のためバリエーション生成をスキップしました"))
                 return
             self._push_history("random")
             self._set_variant(int(self.variant.get()) + 1, persist=True)
@@ -2057,7 +2396,7 @@ class EffectFactoryApp(tk.Tk):
                     )
                     last_frame_key = None
                     loading_pending = True
-                    self.msgq.put(("preview_state", {"loading": True, "text": "低解像度で更新中..."}))
+                    self.msgq.put(("preview_state", {"loading": True, "text": "髣厄ｽｴ隰・・・ｽ・ｧ繝ｻ・｣髯ｷ蜑・ｽｸ讖ｸ・ｽ・ｺ繝ｻ・ｦ驍ｵ・ｺ繝ｻ・ｧ髫ｴ蜴・ｽｽ・ｴ髫ｴ繝ｻ・ｽ・ｰ髣包ｽｳ繝ｻ・ｭ..."}))
                 with self._preview_runtime_lock:
                     runtime = dict(self._preview_runtime)
                 playhead_sec = min(duration_sec, max(0.0, float(runtime.get("playhead_sec", 0.0))))
@@ -2081,7 +2420,7 @@ class EffectFactoryApp(tk.Tk):
                     pass
                 if loading_pending:
                     loading_pending = False
-                    self.msgq.put(("preview_state", {"loading": False, "text": "プレビュー更新完了"}))
+                    self.msgq.put(("preview_state", {"loading": False, "text": "プレビュー準備完了"}))
                 if bool(runtime.get("playing")):
                     now = time.perf_counter()
                     target = 1.0 / max(1, render_fps)
@@ -2095,7 +2434,7 @@ class EffectFactoryApp(tk.Tk):
                 render_context = None
                 plugin = None
                 self.msgq.put(("log", f"[LIVEPREVIEW] render error: {e}"))
-                self.msgq.put(("preview_state", {"loading": False, "text": "プレビュー更新失敗"}))
+                self.msgq.put(("preview_state", {"loading": False, "text": "プレビュー失敗"}))
                 time.sleep(0.2)
 
     def _preview_ui_tick(self):
@@ -2137,7 +2476,7 @@ class EffectFactoryApp(tk.Tk):
             timeline_states = self._build_timeline_states(preset=preset, preset_name=preset_name, eff_id=eff_id, variant=variant)
             preview_dir = os.path.join(outdir, "_preview"); _ensure_dir(preview_dir)
             mp4, thumb, meta = self._make_outputs(preset_name, eff_id, w, h, fps, preview_dir, suffix="_preview")
-            self.msgq.put(("log", f"[PREVIEW] 生成開始: preset={preset_name} effect={eff_id}"))
+            self.msgq.put(("log", f"[PREVIEW] 鬨ｾ蠅難ｽｻ阮吶・鬯ｮ・｢陷ｿ・･繝ｻ・ｧ郢晢ｽｻ preset={preset_name} effect={eff_id}"))
             self.msgq.put(("log", f"[PREVIEW] seed: base={current_state['base_seed']} variant={current_state['variant']} final={current_state['final_seed']}"))
             self.msgq.put(("log", f"[PREVIEW] params: {current_state['resolved_params']}"))
             if timeline_states:
@@ -2157,7 +2496,7 @@ class EffectFactoryApp(tk.Tk):
                     self.msgq.put(("progress", int(i * 100 / frames)))
             p.stdin.close(); out = p.stdout.read().decode("utf-8", errors="ignore") if p.stdout else ""; ret = p.wait()
             if ret != 0:
-                raise RuntimeError(f"ffmpeg 失敗 (code={ret})\n{out[-1200:]}")
+                raise RuntimeError(f"ffmpeg 髯樊ｻゑｽｽ・ｱ髫ｰ・ｨ郢晢ｽｻ(code={ret})\n{out[-1200:]}")
             if first_img is not None:
                 first_img.save(thumb)
             _write_json(meta, {
@@ -2167,8 +2506,8 @@ class EffectFactoryApp(tk.Tk):
                 "params": current_state["resolved_params"], "timeline": self._timeline_meta(current_state, timeline_states), "outputs": {"mp4": mp4, "thumb": thumb}, "created": _now_ts(), "note": "Preview MP4"
             })
             self.msgq.put(("sync_random_ui", {"variant": current_state["variant"], "final_seed": current_state["final_seed"]}))
-            self.msgq.put(("log", f"[PREVIEW] 完了: {mp4}"))
-            self.msgq.put(("done", f"プレビュー生成完了\n{mp4}"))
+            self.msgq.put(("log", f"[PREVIEW] 髯橸ｽｳ陟包ｽ｡繝ｻ・ｺ郢晢ｽｻ {mp4}"))
+            self.msgq.put(("done", f"驛｢譎丞ｹｲ・取ｨ抵ｽｹ譎∽ｾｭ・守､ｼ・ｹ譎｢・ｽ・ｼ鬨ｾ蠅難ｽｻ阮吶・髯橸ｽｳ陟包ｽ｡繝ｻ・ｺ郢晢ｽｻn{mp4}"))
         except Exception as e:
             self.msgq.put(("err", str(e)))
 
@@ -2181,12 +2520,12 @@ class EffectFactoryApp(tk.Tk):
             w, h = int(self.w.get()), int(self.h.get()); fps = int(self.fps.get()); duration = float(self.duration.get())
             frames = int(round(fps * duration))
             if frames < 2:
-                raise ValueError("秒数が短すぎます。")
+                raise ValueError("出力先が空です。")
             variant = 1 if not self.randomize.get() else int(self.variant.get())
             current_state = self._build_param_state(preset=preset, preset_name=preset_name, eff_id=eff_id, variant=variant)
             timeline_states = self._build_timeline_states(preset=preset, preset_name=preset_name, eff_id=eff_id, variant=variant)
             mp4, _, meta = self._make_outputs(preset_name, eff_id, w, h, fps, outdir)
-            self.msgq.put(("log", f"生成開始: preset={preset_name} effect={eff_id}"))
+            self.msgq.put(("log", f"鬨ｾ蠅難ｽｻ阮吶・鬯ｮ・｢陷ｿ・･繝ｻ・ｧ郢晢ｽｻ preset={preset_name} effect={eff_id}"))
             self.msgq.put(("log", f"seed: base={current_state['base_seed']} variant={current_state['variant']} final={current_state['final_seed']} randomize={self.randomize.get()}"))
             self.msgq.put(("log", f"params: {current_state['resolved_params']}"))
             if timeline_states:
@@ -2203,7 +2542,7 @@ class EffectFactoryApp(tk.Tk):
                     self.msgq.put(("progress", int(i * 100 / frames)))
             p.stdin.close(); out = p.stdout.read().decode("utf-8", errors="ignore") if p.stdout else ""; ret = p.wait()
             if ret != 0:
-                raise RuntimeError(f"ffmpeg 失敗 (code={ret})\n{out[-1200:]}")
+                raise RuntimeError(f"ffmpeg 髯樊ｻゑｽｽ・ｱ髫ｰ・ｨ郢晢ｽｻ(code={ret})\n{out[-1200:]}")
             _write_json(meta, {
                 "preset_name": preset_name, "effect_id": eff_id, "effect_name": plugin.name,
                 "output": {"w": w, "h": h, "fps": fps, "duration": duration, "frames": frames, "encoder": self.encoder.get(), "nv_preset": self.nv_preset.get(), "bitrate": self.bitrate.get().strip()},
@@ -2214,9 +2553,9 @@ class EffectFactoryApp(tk.Tk):
             self.msgq.put(("sync_random_ui", {"variant": current_state["variant"], "final_seed": current_state["final_seed"]}))
             if self.randomize.get():
                 self.msgq.put(("advance_variant", int(current_state["variant"]) + 1))
-            self.msgq.put(("log", f"完了: {mp4}"))
+            self.msgq.put(("log", f"髯橸ｽｳ陟包ｽ｡繝ｻ・ｺ郢晢ｽｻ {mp4}"))
             self.msgq.put(("log", f"   meta: {meta}"))
-            self.msgq.put(("done", f"本生成完了\n{mp4}"))
+            self.msgq.put(("done", f"髫ｴ蟷｢・ｽ・ｬ鬨ｾ蠅難ｽｻ阮吶・髯橸ｽｳ陟包ｽ｡繝ｻ・ｺ郢晢ｽｻn{mp4}"))
         except Exception as e:
             self.msgq.put(("err", str(e)))
 
@@ -2230,7 +2569,7 @@ class EffectFactoryApp(tk.Tk):
                     self.pbar["value"] = payload
                 elif kind == "done":
                     self._set_busy(False)
-                    messagebox.showinfo("完了", str(payload))
+                    messagebox.showinfo("Info", str(payload))
                 elif kind == "sync_random_ui":
                     if isinstance(payload, dict):
                         if "variant" in payload:
@@ -2251,8 +2590,8 @@ class EffectFactoryApp(tk.Tk):
                     self._set_preview_loading(bool(payload.get("loading")), payload.get("text"))
                 elif kind == "err":
                     self._set_busy(False)
-                    self._set_preview_loading(False, "プレビュー待機中")
-                    messagebox.showerror("エラー", payload)
+                    self._set_preview_loading(False, "驛｢譎丞ｹｲ・取ｨ抵ｽｹ譎∽ｾｭ・守､ｼ・ｹ譎｢・ｽ・ｼ髯溯ｼ斐・繝ｻ・ｩ雋贋ｼ夲ｽｽ・ｸ繝ｻ・ｭ")
+                    messagebox.showerror("驛｢・ｧ繝ｻ・ｨ驛｢譎｢・ｽ・ｩ驛｢譎｢・ｽ・ｼ", payload)
         except queue.Empty:
             pass
         self.after(120, self._drain_msgs)
@@ -2261,7 +2600,3 @@ class EffectFactoryApp(tk.Tk):
 if __name__ == "__main__":
     app = EffectFactoryApp()
     app.mainloop()
-
-
-
-

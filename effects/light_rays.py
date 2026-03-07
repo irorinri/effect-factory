@@ -2,7 +2,7 @@ from PIL import Image, ImageDraw, ImageFilter
 import numpy as np
 import os, sys
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, film_grain, frame_params, max_int, motion_direction_rad_at, rotate_vector
+from _fxutil import add_glow, film_grain, frame_params, integrated_rate_phase, max_int, motion_direction_rad_at, rotate_vector
 
 
 COLOR_PRESETS = {
@@ -72,13 +72,8 @@ def render_frame(cache, i):
     duration_sec = max(1.0 / fps, (n - 1) / float(fps))
     params = frame_params(cache)
     defaults = cache["defaults"]
-    speed = max(0.0, float(params.get("speed", defaults["speed"])))
-
     def phase_from_rate(rate_hz):
-        scaled_rate = float(rate_hz) * speed
-        if loop:
-            return scaled_rate * duration_sec * u
-        return scaled_rate * t_sec
+        return integrated_rate_phase(cache, t_sec, rate_hz, scale_keys=("speed",), scale_defaults=defaults)
 
     count = min(float(cache["max_count"]), max(0.0, float(params.get("count", defaults["count"]))))
     base_width = max(1.0, float(params.get("width", defaults["width"])))

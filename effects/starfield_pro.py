@@ -1,8 +1,9 @@
-from PIL import Image, ImageChops, ImageDraw, ImageEnhance
+﻿from PIL import Image, ImageChops, ImageDraw, ImageEnhance
 import numpy as np
 import os, sys
+
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, chromatic_aberration, fbm_noise, f32_to_pil, film_grain, frame_params, integrated_motion_offset, max_int, max_numeric, motion_direction_rad_at, rotate_vector
+from _fxutil import add_glow, chromatic_aberration, fbm_noise, f32_to_pil, film_grain, frame_params, integrated_motion_offset, integrated_rate_phase, max_int, max_numeric, motion_direction_rad_at, rotate_vector
 
 
 def _make_star_layer(w, h, rng, count, r_min, r_max, brightness_min, brightness_max):
@@ -20,6 +21,50 @@ def _make_star_layer(w, h, rng, count, r_min, r_max, brightness_min, brightness_
     return img
 
 
+def _make_nebula_layer(w, h, seed, tint):
+    neb_noise = fbm_noise(w, h, seed=int(seed), octaves=4, base_grid=max(64, min(w, h) // 10))
+    neb_noise = np.clip((neb_noise - 0.25) / 0.75, 0.0, 1.0) ** 1.4
+    neb = np.stack([
+        neb_noise * float(tint[0]),
+        neb_noise * float(tint[1]),
+        neb_noise * float(tint[2]),
+    ], axis=-1)
+    return f32_to_pil(neb)
+
+
+def _make_band_layer(w, h, seed):
+    base = fbm_noise(w, h, seed=int(seed), octaves=5, base_grid=max(48, min(w, h) // 12))
+    fine = fbm_noise(w, h, seed=int(seed) + 17, octaves=3, base_grid=max(28, min(w, h) // 18))
+    yy = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
+    xx = np.linspace(0.0, 1.0, w, dtype=np.float32)[None, :]
+    curtains = 0.5 + 0.5 * np.sin((yy * 7.5 + base * 2.8 + xx * 0.9) * np.pi)
+    curtains *= np.clip(1.08 - np.abs(xx - 0.5) * 1.7, 0.0, 1.0)
+    curtains *= 0.65 + fine * 0.75
+    curtains = np.clip(curtains, 0.0, 1.0) ** 1.9
+    rgb = np.stack([
+        curtains * (0.95 - yy * 0.20),
+        curtains * (0.42 + fine * 0.45),
+        curtains * (0.95 + base * 0.18),
+    ], axis=-1)
+    return f32_to_pil(np.clip(rgb, 0.0, 1.0))
+
+
+def _make_prism_layer(w, h, seed):
+    base = fbm_noise(w, h, seed=int(seed), octaves=4, base_grid=max(54, min(w, h) // 11))
+    yy = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
+    xx = np.linspace(0.0, 1.0, w, dtype=np.float32)[None, :]
+    arcs = np.clip(1.0 - np.abs(yy - (0.28 + 0.20 * np.sin(xx * np.pi * 2.0))) / 0.18, 0.0, 1.0)
+    prism = np.clip((base - 0.32) / 0.68, 0.0, 1.0) ** 1.7
+    prism *= arcs
+    rgb = np.stack([
+        prism * np.clip(0.70 + 0.30 * np.sin(xx * np.pi * 2.0 + 0.0), 0.0, 1.0),
+        prism * np.clip(0.70 + 0.30 * np.sin(xx * np.pi * 2.0 + 2.1), 0.0, 1.0),
+        prism * np.clip(0.70 + 0.30 * np.sin(xx * np.pi * 2.0 + 4.2), 0.0, 1.0),
+    ], axis=-1)
+    rgb *= (0.55 + 0.45 * (1.0 - yy))[..., None]
+    return f32_to_pil(np.clip(rgb, 0.0, 1.0))
+
+
 def _visible_fraction(target: float, index: int) -> float:
     return float(np.clip(float(target) - float(index), 0.0, 1.0))
 
@@ -32,17 +77,19 @@ def build_cache(w, h, frames, seed, params):
     mid = _make_star_layer(w, h, rng, count=int(base_count * 0.60 * max_density), r_min=0, r_max=1, brightness_min=120, brightness_max=220)
     near = _make_star_layer(w, h, rng, count=int(base_count * 0.45 * max_density), r_min=1, r_max=2, brightness_min=160, brightness_max=255)
 
+    tint = (
+        float(params.get("nebula_r", 0.55)),
+        float(params.get("nebula_g", 0.65)),
+        float(params.get("nebula_b", 1.00)),
+    )
     max_nebula = max(0.0, max_numeric(params, "nebula", 0.35))
-    if max_nebula > 0:
-        neb_noise = fbm_noise(w, h, seed=int(seed) + 999, octaves=4, base_grid=max(64, min(w, h) // 10))
-        neb_noise = np.clip((neb_noise - 0.25) / 0.75, 0.0, 1.0) ** 1.4
-        tint_r = float(params.get("nebula_r", 0.55))
-        tint_g = float(params.get("nebula_g", 0.65))
-        tint_b = float(params.get("nebula_b", 1.00))
-        neb = np.stack([neb_noise * tint_r, neb_noise * tint_g, neb_noise * tint_b], axis=-1)
-        neb_img = f32_to_pil(neb)
-    else:
-        neb_img = Image.new("RGB", (w, h), (0, 0, 0))
+    neb_img = _make_nebula_layer(w, h, int(seed) + 999, tint) if max_nebula > 0 else Image.new("RGB", (w, h), (0, 0, 0))
+
+    max_bands = max(0.0, max_numeric(params, "nebula_bands", 0.0))
+    neb_band = _make_band_layer(w, h, int(seed) + 1441) if max_bands > 0 else Image.new("RGB", (w, h), (0, 0, 0))
+
+    max_prism = max(0.0, max_numeric(params, "nebula_prism", 0.0))
+    neb_prism = _make_prism_layer(w, h, int(seed) + 1777) if max_prism > 0 else Image.new("RGB", (w, h), (0, 0, 0))
 
     max_twinkle = max(0.0, max_numeric(params, "twinkle", 0.20))
     if max_twinkle > 0:
@@ -82,6 +129,8 @@ def build_cache(w, h, frames, seed, params):
         "mid": mid,
         "near": near,
         "neb": neb_img,
+        "neb_band": neb_band,
+        "neb_prism": neb_prism,
         "tw_map": tw_map,
         "shoots": shoots,
         "seed": int(seed),
@@ -93,6 +142,9 @@ def build_cache(w, h, frames, seed, params):
         "defaults": {
             "density": float(params.get("density", max_density or 1.0)),
             "nebula": float(params.get("nebula", 0.35)),
+            "nebula_bands": float(params.get("nebula_bands", 0.0)),
+            "nebula_prism": float(params.get("nebula_prism", 0.0)),
+            "nebula_swirl": float(params.get("nebula_swirl", 0.0)),
             "twinkle": float(params.get("twinkle", 0.20)),
             "shooting_stars": float(params.get("shooting_stars", max_shoots)),
             "glow_radius": float(params.get("glow_radius", 6.0)),
@@ -111,44 +163,72 @@ def build_cache(w, h, frames, seed, params):
 
 def render_frame(cache, i):
     w, h, frames = cache["w"], cache["h"], cache["frames"]
-    loop = bool(cache.get("__loop__", False))
     fps = max(1, int(cache.get("__fps__", 30)))
     n = max(1, int(cache.get("__frames__", frames)))
     t_sec = i / float(fps)
-    u = (i / float(max(1, n - 1))) if n > 1 else 0.0
-    duration_sec = max(1.0 / fps, (n - 1) / float(fps))
     params = frame_params(cache)
     defaults = cache["defaults"]
-    speed = max(0.0, float(params.get("speed", defaults["speed"])))
 
     def phase_from_rate(rate_hz):
-        scaled_rate = float(rate_hz) * speed
-        if loop:
-            return scaled_rate * duration_sec * u
-        return scaled_rate * t_sec
+        return integrated_rate_phase(cache, t_sec, rate_hz, scale_keys=("speed",), scale_defaults=defaults)
 
     density = max(0.0, float(params.get("density", defaults["density"])))
     density_ratio = 0.0 if cache["max_density"] <= 1e-9 else min(1.0, density / cache["max_density"])
     twinkle_strength = max(0.0, float(params.get("twinkle", defaults["twinkle"])))
     nebula_strength = max(0.0, float(params.get("nebula", defaults["nebula"])))
+    band_strength = max(0.0, float(params.get("nebula_bands", defaults["nebula_bands"])))
+    prism_strength = max(0.0, float(params.get("nebula_prism", defaults["nebula_prism"])))
+    swirl_strength = max(0.0, float(params.get("nebula_swirl", defaults["nebula_swirl"])))
     drift_x = float(params.get("drift_x_cycles", defaults["drift_x_cycles"]))
     drift_y = float(params.get("drift_y_cycles", defaults["drift_y_cycles"]))
     motion_angle = motion_direction_rad_at(cache, t_sec, default=defaults["motion_direction"])
 
     out = Image.new("RGB", (w, h), (0, 0, 0))
 
-    if nebula_strength > 0:
-        neb_dxf, neb_dyf = integrated_motion_offset(cache, t_sec, w * drift_x * speed, h * drift_y * speed, default=defaults["motion_direction"])
-        neb_o = ImageChops.offset(cache["neb"], int(round(neb_dxf)), int(round(neb_dyf)))
-        if nebula_strength != 1.0:
-            neb_o = ImageEnhance.Brightness(neb_o).enhance(nebula_strength)
-        out = ImageChops.add(out, neb_o)
+    if nebula_strength > 0 or band_strength > 0 or prism_strength > 0:
+        neb_dxf, neb_dyf = integrated_motion_offset(
+            cache,
+            t_sec,
+            w,
+            h,
+            default=defaults["motion_direction"],
+            x_scale_keys=("drift_x_cycles", "speed"),
+            y_scale_keys=("drift_y_cycles", "speed"),
+            scale_defaults=defaults,
+        )
+        swirl_phase = phase_from_rate(0.045)
+        swirl_dx = np.sin(2.0 * np.pi * swirl_phase) * w * 0.045 * swirl_strength
+        swirl_dy = np.cos(2.0 * np.pi * (swirl_phase * 0.73 + 0.17)) * h * 0.035 * swirl_strength
 
-    tw_dxf, tw_dyf = integrated_motion_offset(cache, t_sec, w * speed, h * speed, default=defaults["motion_direction"])
+        if nebula_strength > 0:
+            neb_o = ImageChops.offset(cache["neb"], int(round(neb_dxf + swirl_dx)), int(round(neb_dyf + swirl_dy)))
+            if nebula_strength != 1.0:
+                neb_o = ImageEnhance.Brightness(neb_o).enhance(nebula_strength)
+            out = ImageChops.add(out, neb_o)
+
+        if band_strength > 0:
+            band_phase = phase_from_rate(0.065)
+            band_dx = np.cos(2.0 * np.pi * band_phase) * w * 0.03 * (0.35 + swirl_strength)
+            band_dy = np.sin(2.0 * np.pi * (band_phase + 0.18)) * h * 0.045 * (0.25 + swirl_strength)
+            band_o = ImageChops.offset(cache["neb_band"], int(round(neb_dxf * 0.85 + band_dx)), int(round(neb_dyf * 0.60 + band_dy)))
+            if band_strength != 1.0:
+                band_o = ImageEnhance.Brightness(band_o).enhance(band_strength)
+            out = ImageChops.add(out, band_o)
+
+        if prism_strength > 0:
+            prism_phase = phase_from_rate(0.055)
+            prism_dx = np.sin(2.0 * np.pi * (prism_phase + 0.31)) * w * 0.04 * (0.4 + swirl_strength)
+            prism_dy = np.cos(2.0 * np.pi * (prism_phase * 1.2 + 0.07)) * h * 0.03 * (0.3 + swirl_strength)
+            prism_o = ImageChops.offset(cache["neb_prism"], int(round(neb_dxf * 1.15 - prism_dx)), int(round(neb_dyf * 0.90 + prism_dy)))
+            if prism_strength != 1.0:
+                prism_o = ImageEnhance.Brightness(prism_o).enhance(prism_strength)
+            out = ImageChops.add(out, prism_o)
+
+    tw_dxf, tw_dyf = integrated_motion_offset(cache, t_sec, w, h, default=defaults["motion_direction"], x_scale_keys=("speed",), y_scale_keys=("speed",), scale_defaults=defaults)
     tw = ImageChops.offset(cache["tw_map"], int(round(tw_dxf)), int(round(tw_dyf)))
 
     def lay(layer_img, kx, ky, base_gain):
-        oxf, oyf = integrated_motion_offset(cache, t_sec, w * kx * speed, h * ky * speed, default=defaults["motion_direction"])
+        oxf, oyf = integrated_motion_offset(cache, t_sec, w * kx, h * ky, default=defaults["motion_direction"], x_scale_keys=("speed",), y_scale_keys=("speed",), scale_defaults=defaults)
         layer = ImageChops.offset(layer_img, int(round(oxf)), int(round(oyf)))
         if twinkle_strength > 0:
             a = np.asarray(layer, dtype=np.float32) / 255.0
@@ -184,10 +264,7 @@ def render_frame(cache, i):
             vis = _visible_fraction(shoot_count, shoot["index"])
             if vis <= 0.0:
                 continue
-            if loop:
-                phase = ((phase_from_rate(shoot_speed_hz)) - shoot["start"]) % 1.0
-            else:
-                phase = ((t_sec * shoot_speed_hz * speed) - shoot["start"]) % 1.0
+            phase = (phase_from_rate(shoot_speed_hz) - shoot["start"]) % 1.0
             active = phase < shoot["duration"]
             if not active:
                 continue
@@ -227,8 +304,12 @@ EFFECT = {
     "params": [
         {"key": "density", "label": "Density", "type": "float", "default": 1.0, "min": 0.2, "max": 2.5, "step": 0.1},
         {"key": "nebula", "label": "Nebula", "type": "float", "default": 0.35, "min": 0.0, "max": 1.2, "step": 0.05},
+        {"key": "nebula_bands", "label": "Nebula Bands", "type": "float", "default": 0.0, "min": 0.0, "max": 1.4, "step": 0.05},
+        {"key": "nebula_prism", "label": "Nebula Prism", "type": "float", "default": 0.0, "min": 0.0, "max": 1.4, "step": 0.05},
+        {"key": "nebula_swirl", "label": "Nebula Swirl", "type": "float", "default": 0.0, "min": 0.0, "max": 1.4, "step": 0.05},
         {"key": "twinkle", "label": "Twinkle", "type": "float", "default": 0.20, "min": 0.0, "max": 0.8, "step": 0.02},
         {"key": "shooting_stars", "label": "Shooting Stars", "type": "int", "default": 3, "min": 0, "max": 12, "step": 1},
+        {"key": "shoot_period_sec", "label": "Shoot Period", "type": "float", "default": 2.0, "min": 0.3, "max": 6.0, "step": 0.1},
         {"key": "glow_radius", "label": "Glow Radius", "type": "float", "default": 6.0, "min": 0.0, "max": 18.0, "step": 0.5},
         {"key": "glow_strength", "label": "Glow Strength", "type": "float", "default": 0.9, "min": 0.0, "max": 2.0, "step": 0.05},
         {"key": "chromatic", "label": "Chromatic Shift", "type": "int", "default": 2, "min": 0, "max": 8, "step": 1},

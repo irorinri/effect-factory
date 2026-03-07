@@ -16,36 +16,56 @@
   },
   "params": {
     "density": [
-      0.6,
-      1.1
+      0.8,
+      1.25
     ],
     "nebula": [
-      0.55,
+      0.8,
+      1.15
+    ],
+    "nebula_bands": [
+      0.45,
       1.05
     ],
+    "nebula_prism": [
+      0.35,
+      0.95
+    ],
+    "nebula_swirl": [
+      0.4,
+      1.1
+    ],
     "twinkle": [
-      0.1,
-      0.25
+      0.08,
+      0.22
     ],
     "shooting_stars": [
-      1,
-      4
-    ],
-    "glow_radius": [
-      6.0,
-      12.0
-    ],
-    "glow_strength": [
-      1.0,
-      1.8
-    ],
-    "chromatic": [
       2,
       5
     ],
+    "shoot_period_sec": [
+      1.2,
+      2.5
+    ],
+    "glow_radius": [
+      8.0,
+      14.0
+    ],
+    "glow_strength": [
+      1.2,
+      1.9
+    ],
+    "chromatic": [
+      3,
+      6
+    ],
     "grain": [
       0.02,
-      0.06
+      0.05
+    ],
+    "brightness": [
+      0.95,
+      1.18
     ],
     "drift_x_cycles": [
       1,
@@ -54,6 +74,14 @@
     "drift_y_cycles": [
       1,
       4
+    ],
+    "speed": [
+      0.45,
+      1.0
+    ],
+    "motion_direction": [
+      -24,
+      24
     ]
   }
 }

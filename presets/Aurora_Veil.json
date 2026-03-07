@@ -1,0 +1,71 @@
+{
+  "name": "Aurora Veil",
+  "effect_id": "aurora_veil",
+  "loop_mode": true,
+  "output": {
+    "w": 1920,
+    "h": 1080,
+    "fps": 30,
+    "duration": 12.0,
+    "encoder": "h264_nvenc",
+    "nv_preset": "p4",
+    "bitrate": "14M"
+  },
+  "random": {
+    "base_seed": 73124
+  },
+  "params": {
+    "density": [
+      0.8,
+      1.5
+    ],
+    "width": [
+      0.55,
+      1.2
+    ],
+    "length": [
+      0.62,
+      0.95
+    ],
+    "flicker": [
+      0.15,
+      0.65
+    ],
+    "blur": [
+      0.6,
+      2.2
+    ],
+    "glow_radius": [
+      7.0,
+      15.0
+    ],
+    "glow_strength": [
+      0.8,
+      1.7
+    ],
+    "brightness": [
+      0.9,
+      1.15
+    ],
+    "grain": [
+      0.0,
+      0.04
+    ],
+    "speed": [
+      0.35,
+      1.2
+    ],
+    "motion_direction": [
+      -30,
+      30
+    ],
+    "palette": {
+      "choices": [
+        "fantasia",
+        "emerald",
+        "polar",
+        "sunset"
+      ]
+    }
+  }
+}
