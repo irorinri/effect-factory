@@ -6,6 +6,11 @@ def clamp01(x):
     return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
 
 
+def smoothstep01(x):
+    x = clamp01(float(x))
+    return x * x * (3.0 - 2.0 * x)
+
+
 def normalize_signed_degrees(value: float) -> float:
     value = ((float(value) + 180.0) % 360.0) - 180.0
     return 180.0 if abs(value + 180.0) < 1e-9 else value
@@ -24,89 +29,6 @@ def shortest_degree_delta(left_value: float, right_value: float) -> float:
 def interpolate_signed_degrees(left_value: float, right_value: float, mix: float) -> float:
     delta = shortest_degree_delta(left_value, right_value)
     return normalize_signed_degrees(float(left_value) + delta * float(mix))
-
-
-def _unwrap_signed_degree_sequence(values) -> list[float]:
-    out = []
-    prev = None
-    for value in values:
-        current = normalize_signed_degrees(value)
-        if prev is None:
-            out.append(current)
-            prev = current
-            continue
-        current = prev + shortest_degree_delta(prev, current)
-        out.append(current)
-        prev = current
-    return out
-
-
-def _pchip_endpoint_slope(h0: float, h1: float, delta0: float, delta1: float) -> float:
-    slope = ((2.0 * h0 + h1) * delta0 - h0 * delta1) / max(1e-6, h0 + h1)
-    if abs(slope) <= 1e-12:
-        return 0.0
-    if np.sign(slope) != np.sign(delta0):
-        return 0.0
-    if np.sign(delta0) != np.sign(delta1) and abs(slope) > abs(3.0 * delta0):
-        return 3.0 * delta0
-    return slope
-
-
-def _pchip_slopes(xs, ys) -> list[float]:
-    n = len(xs)
-    if n <= 1:
-        return [0.0] * n
-    hs = [max(1e-6, float(xs[i + 1]) - float(xs[i])) for i in range(n - 1)]
-    deltas = [(float(ys[i + 1]) - float(ys[i])) / hs[i] for i in range(n - 1)]
-    if n == 2:
-        return [deltas[0], deltas[0]]
-    slopes = [0.0] * n
-    slopes[0] = _pchip_endpoint_slope(hs[0], hs[1], deltas[0], deltas[1])
-    slopes[-1] = _pchip_endpoint_slope(hs[-1], hs[-2], deltas[-1], deltas[-2])
-    for i in range(1, n - 1):
-        prev_delta = deltas[i - 1]
-        next_delta = deltas[i]
-        if abs(prev_delta) <= 1e-12 or abs(next_delta) <= 1e-12 or np.sign(prev_delta) != np.sign(next_delta):
-            slopes[i] = 0.0
-            continue
-        w1 = 2.0 * hs[i] + hs[i - 1]
-        w2 = hs[i] + 2.0 * hs[i - 1]
-        slopes[i] = (w1 + w2) / ((w1 / prev_delta) + (w2 / next_delta))
-    return slopes
-
-
-def _pchip_interpolate(xs, ys, x_value: float) -> float:
-    n = len(xs)
-    if n == 0:
-        return 0.0
-    if n == 1:
-        return float(ys[0])
-    x_value = float(x_value)
-    if x_value <= float(xs[0]):
-        return float(ys[0])
-    if x_value >= float(xs[-1]):
-        return float(ys[-1])
-    slopes = _pchip_slopes(xs, ys)
-    seg = 0
-    for i in range(n - 1):
-        if x_value <= float(xs[i + 1]) + 1e-9:
-            seg = i
-            break
-    x0 = float(xs[seg])
-    x1 = float(xs[seg + 1])
-    h = max(1e-6, x1 - x0)
-    s = clamp01((x_value - x0) / h)
-    y0 = float(ys[seg])
-    y1 = float(ys[seg + 1])
-    m0 = float(slopes[seg])
-    m1 = float(slopes[seg + 1])
-    s2 = s * s
-    s3 = s2 * s
-    h00 = 2.0 * s3 - 3.0 * s2 + 1.0
-    h10 = s3 - 2.0 * s2 + s
-    h01 = -2.0 * s3 + 3.0 * s2
-    h11 = s3 - s2
-    return h00 * y0 + h10 * h * m0 + h01 * y1 + h11 * h * m1
 
 
 def timeline_markers(source) -> list[dict]:
@@ -147,53 +69,16 @@ def _timeline_param_samples(source, key: str, default: float = 0.0):
     return merged
 
 
-def frame_params(cache: dict) -> dict:
-    params = cache.get("__runtime_params__") if isinstance(cache, dict) else None
-    if isinstance(params, dict):
-        return params
-    return cache if isinstance(cache, dict) else {}
-
-
-def _numeric_from_source(source, key: str, default: float = 0.0) -> float:
-    params = frame_params(source)
-    try:
-        return float(params.get(key, default))
-    except Exception:
-        return float(default)
-
-
-def numeric_param_at(source, time_sec: float = None, key: str = "", default: float = 0.0) -> float:
-    if not key:
-        return float(default)
-    if time_sec is None:
-        return _numeric_from_source(source, key, default)
-    samples = _timeline_param_samples(source, key, default)
-    if not samples:
-        return numeric_param_at(source, None, key=key, default=default)
-    time_sec = float(time_sec)
-    if time_sec <= samples[0][0]:
-        return float(samples[0][1])
-    if time_sec >= samples[-1][0]:
-        return float(samples[-1][1])
-    for (left_time, left_value), (right_time, right_value) in zip(samples, samples[1:]):
-        if time_sec <= right_time + 1e-9:
-            span = max(1e-6, right_time - left_time)
-            mix = clamp01((time_sec - left_time) / span)
-            return float(left_value) + (float(right_value) - float(left_value)) * mix
-    return float(samples[-1][1])
-
-
 def timeline_values(source, key: str, default=None):
     values = []
-    params = frame_params(source)
-    if isinstance(params, dict) and key in params:
-        values.append(params.get(key, default))
+    if isinstance(source, dict) and key in source:
+        values.append(source.get(key, default))
     for marker in timeline_markers(source):
         if not isinstance(marker, dict):
             continue
-        marker_params = marker.get("params")
-        if isinstance(marker_params, dict) and key in marker_params:
-            values.append(marker_params.get(key, default))
+        params = marker.get("params")
+        if isinstance(params, dict) and key in params:
+            values.append(params.get(key, default))
     if not values:
         values.append(default)
     return values
@@ -227,20 +112,32 @@ def max_int(source, key: str, default: int = 0) -> int:
     return int(np.ceil(max_numeric(source, key, float(default))))
 
 
+def frame_params(cache: dict) -> dict:
+    params = cache.get("__runtime_params__") if isinstance(cache, dict) else None
+    if isinstance(params, dict):
+        return params
+    return cache if isinstance(cache, dict) else {}
+
+
 def motion_direction_deg_at(source, time_sec: float = None, key: str = "motion_direction", default: float = 0.0) -> float:
     if time_sec is None:
-        return normalize_signed_degrees(_numeric_from_source(source, key, default))
+        try:
+            return normalize_signed_degrees(float(source.get(key, default)))
+        except Exception:
+            return normalize_signed_degrees(default)
     samples = _timeline_param_samples(source, key, default)
     if not samples:
         return motion_direction_deg_at(source, None, key=key, default=default)
-    time_sec = float(time_sec)
     if time_sec <= samples[0][0]:
         return normalize_signed_degrees(samples[0][1])
     if time_sec >= samples[-1][0]:
         return normalize_signed_degrees(samples[-1][1])
-    xs = [sample[0] for sample in samples]
-    ys = _unwrap_signed_degree_sequence([sample[1] for sample in samples])
-    return normalize_signed_degrees(_pchip_interpolate(xs, ys, time_sec))
+    for (left_time, left_value), (right_time, right_value) in zip(samples, samples[1:]):
+        if time_sec <= right_time + 1e-9:
+            span = max(1e-6, right_time - left_time)
+            mix = smoothstep01((float(time_sec) - left_time) / span)
+            return interpolate_signed_degrees(left_value, right_value, mix)
+    return normalize_signed_degrees(samples[-1][1])
 
 
 def motion_direction_rad(source, key: str = "motion_direction", default: float = 0.0) -> float:
@@ -251,148 +148,56 @@ def motion_direction_rad_at(source, time_sec: float, key: str = "motion_directio
     return np.deg2rad(motion_direction_deg_at(source, float(time_sec), key=key, default=default))
 
 
-def _normalize_scale_keys(keys) -> tuple[str, ...]:
-    if not keys:
-        return ()
-    if isinstance(keys, str):
-        return (keys,)
-    return tuple(str(key) for key in keys if key)
-
-
-def _scale_defaults_key(keys, defaults: dict | None):
-    defaults = defaults or {}
-    return tuple((key, round(float(defaults.get(key, 1.0)), 6)) for key in keys)
-
-
-def _scale_product_value(source, time_sec: float, keys, defaults: dict | None = None, minimum: float | None = None) -> float:
-    keys = _normalize_scale_keys(keys)
-    defaults = defaults or {}
-    value = 1.0
-    for key in keys:
-        value *= numeric_param_at(source, time_sec, key=key, default=defaults.get(key, 1.0))
-    if minimum is not None:
-        value = max(float(minimum), float(value))
-    return float(value)
-
-
-def _timeline_sample_times(cache: dict):
+def _motion_direction_integral_state(cache: dict, key: str = "motion_direction", default: float = 0.0):
+    if not isinstance(cache, dict):
+        return {"times": [0.0], "cos": [0.0], "sin": [0.0], "fps": 30.0}
+    states = cache.setdefault("__motion_direction_integrals__", {})
+    cache_key = (key, round(float(default), 6))
+    if cache_key in states:
+        return states[cache_key]
     fps = max(1, int(cache.get("__fps__", 30)))
     frames = max(1, int(cache.get("__frames__", cache.get("frames", 1))))
-    return fps, [i / float(fps) for i in range(frames)]
+    times = [i / float(fps) for i in range(frames)]
+    angles = [motion_direction_rad_at(cache, t, key=key, default=default) for t in times]
+    cos_acc = [0.0] * frames
+    sin_acc = [0.0] * frames
+    dt = 1.0 / float(fps)
+    for i in range(1, frames):
+        cos_acc[i] = cos_acc[i - 1] + 0.5 * (float(np.cos(angles[i - 1])) + float(np.cos(angles[i]))) * dt
+        sin_acc[i] = sin_acc[i - 1] + 0.5 * (float(np.sin(angles[i - 1])) + float(np.sin(angles[i]))) * dt
+    state = {"times": times, "cos": cos_acc, "sin": sin_acc, "fps": float(fps)}
+    states[cache_key] = state
+    return state
 
 
-def _interpolate_integral_array(times, values, time_sec: float) -> float:
-    if not times:
-        return 0.0
+def _motion_direction_integral_at(cache: dict, time_sec: float, key: str = "motion_direction", default: float = 0.0):
     if time_sec <= 0.0:
-        return 0.0
+        return 0.0, 0.0
+    state = _motion_direction_integral_state(cache, key=key, default=default)
+    times = state["times"]
+    cos_acc = state["cos"]
+    sin_acc = state["sin"]
+    if not times:
+        return 0.0, 0.0
     if time_sec >= times[-1]:
-        return float(values[-1])
-    fps = 1.0 / max(1e-6, float(times[1] - times[0])) if len(times) > 1 else 30.0
+        return cos_acc[-1], sin_acc[-1]
+    fps = state["fps"]
     idx = min(len(times) - 1, max(0, int(np.floor(float(time_sec) * fps + 1e-9))))
     t0 = times[idx]
     if idx >= len(times) - 1 or abs(float(time_sec) - t0) <= 1e-9:
-        return float(values[idx])
+        return cos_acc[idx], sin_acc[idx]
     t1 = times[idx + 1]
     mix = clamp01((float(time_sec) - t0) / max(1e-6, t1 - t0))
-    return float(values[idx]) + (float(values[idx + 1]) - float(values[idx])) * mix
+    cos_val = cos_acc[idx] + (cos_acc[idx + 1] - cos_acc[idx]) * mix
+    sin_val = sin_acc[idx] + (sin_acc[idx + 1] - sin_acc[idx]) * mix
+    return cos_val, sin_val
 
 
-def _scale_integral_state(cache: dict, keys=None, defaults: dict | None = None, minimum: float | None = None):
-    if not isinstance(cache, dict):
-        return {"times": [0.0], "values": [0.0]}
-    states = cache.setdefault("__scale_integrals__", {})
-    keys = _normalize_scale_keys(keys)
-    cache_key = (keys, _scale_defaults_key(keys, defaults), None if minimum is None else round(float(minimum), 6))
-    if cache_key in states:
-        return states[cache_key]
-    _fps, times = _timeline_sample_times(cache)
-    values = [_scale_product_value(cache, t, keys, defaults=defaults, minimum=minimum) for t in times]
-    acc = [0.0] * len(times)
-    for i in range(1, len(times)):
-        dt = times[i] - times[i - 1]
-        acc[i] = acc[i - 1] + 0.5 * (values[i - 1] + values[i]) * dt
-    state = {"times": times, "values": acc}
-    states[cache_key] = state
-    return state
-
-
-def integrated_rate_phase(cache: dict, time_sec: float, rate_hz: float, scale_keys=None, scale_defaults: dict | None = None, minimum: float | None = None) -> float:
-    state = _scale_integral_state(cache, keys=scale_keys, defaults=scale_defaults, minimum=minimum)
-    return float(rate_hz) * _interpolate_integral_array(state["times"], state["values"], float(time_sec))
-
-
-def _motion_offset_integral_state(
-    cache: dict,
-    key: str = "motion_direction",
-    default: float = 0.0,
-    x_scale_keys=None,
-    y_scale_keys=None,
-    scale_defaults: dict | None = None,
-):
-    if not isinstance(cache, dict):
-        return {"times": [0.0], "xcos": [0.0], "ysin": [0.0], "xsin": [0.0], "ycos": [0.0]}
-    states = cache.setdefault("__motion_offset_integrals__", {})
-    x_keys = _normalize_scale_keys(x_scale_keys)
-    y_keys = _normalize_scale_keys(y_scale_keys)
-    cache_key = (
-        str(key),
-        round(float(default), 6),
-        _scale_defaults_key(x_keys, scale_defaults),
-        _scale_defaults_key(y_keys, scale_defaults),
-    )
-    if cache_key in states:
-        return states[cache_key]
-    _fps, times = _timeline_sample_times(cache)
-    angles = [motion_direction_rad_at(cache, t, key=key, default=default) for t in times]
-    x_scales = [_scale_product_value(cache, t, x_keys, defaults=scale_defaults) for t in times]
-    y_scales = [_scale_product_value(cache, t, y_keys, defaults=scale_defaults) for t in times]
-    xcos = [0.0] * len(times)
-    ysin = [0.0] * len(times)
-    xsin = [0.0] * len(times)
-    ycos = [0.0] * len(times)
-    for i in range(1, len(times)):
-        dt = times[i] - times[i - 1]
-        cos0 = float(np.cos(angles[i - 1]))
-        cos1 = float(np.cos(angles[i]))
-        sin0 = float(np.sin(angles[i - 1]))
-        sin1 = float(np.sin(angles[i]))
-        xcos[i] = xcos[i - 1] + 0.5 * ((x_scales[i - 1] * cos0) + (x_scales[i] * cos1)) * dt
-        ysin[i] = ysin[i - 1] + 0.5 * ((y_scales[i - 1] * sin0) + (y_scales[i] * sin1)) * dt
-        xsin[i] = xsin[i - 1] + 0.5 * ((x_scales[i - 1] * sin0) + (x_scales[i] * sin1)) * dt
-        ycos[i] = ycos[i - 1] + 0.5 * ((y_scales[i - 1] * cos0) + (y_scales[i] * cos1)) * dt
-    state = {"times": times, "xcos": xcos, "ysin": ysin, "xsin": xsin, "ycos": ycos}
-    states[cache_key] = state
-    return state
-
-
-def integrated_motion_offset(
-    cache: dict,
-    time_sec: float,
-    vx_per_sec: float,
-    vy_per_sec: float,
-    key: str = "motion_direction",
-    default: float = 0.0,
-    x_scale_keys=None,
-    y_scale_keys=None,
-    scale_defaults: dict | None = None,
-) -> tuple[float, float]:
-    state = _motion_offset_integral_state(
-        cache,
-        key=key,
-        default=default,
-        x_scale_keys=x_scale_keys,
-        y_scale_keys=y_scale_keys,
-        scale_defaults=scale_defaults,
-    )
-    time_sec = float(time_sec)
-    xcos = _interpolate_integral_array(state["times"], state["xcos"], time_sec)
-    ysin = _interpolate_integral_array(state["times"], state["ysin"], time_sec)
-    xsin = _interpolate_integral_array(state["times"], state["xsin"], time_sec)
-    ycos = _interpolate_integral_array(state["times"], state["ycos"], time_sec)
+def integrated_motion_offset(cache: dict, time_sec: float, vx_per_sec: float, vy_per_sec: float, key: str = "motion_direction", default: float = 0.0) -> tuple[float, float]:
+    cos_int, sin_int = _motion_direction_integral_at(cache, float(time_sec), key=key, default=default)
     vx = float(vx_per_sec)
     vy = float(vy_per_sec)
-    return (vx * xcos - vy * ysin, vx * xsin + vy * ycos)
+    return (vx * cos_int - vy * sin_int, vx * sin_int + vy * cos_int)
 
 
 def pil_to_f32(img: Image.Image) -> np.ndarray:

@@ -53,6 +53,14 @@ def render_frame(cache, i):
     duration_sec = max(1.0 / fps, (n - 1) / float(fps))
     params = frame_params(cache)
     defaults = cache["defaults"]
+    speed = max(0.0, float(params.get("speed", defaults["speed"])))
+
+    def phase_from_rate(rate_hz):
+        scaled_rate = float(rate_hz) * speed
+        if loop:
+            return scaled_rate * duration_sec * u
+        return scaled_rate * t_sec
+
     tint_name = str(params.get("tint", defaults["tint"]))
     tr, tg, tb = TINTS.get(tint_name, TINTS[defaults["tint"]])
     strength = max(0.0, float(params.get("strength", defaults["strength"])))
@@ -70,12 +78,9 @@ def render_frame(cache, i):
     oxf, oyf = integrated_motion_offset(
         cache,
         t_sec,
-        w,
-        h,
+        w * float(params.get("drift_x_cycles", defaults["drift_x_cycles"])) * speed,
+        h * float(params.get("drift_y_cycles", defaults["drift_y_cycles"])) * speed,
         default=defaults["motion_direction"],
-        x_scale_keys=("drift_x_cycles", "speed"),
-        y_scale_keys=("drift_y_cycles", "speed"),
-        scale_defaults=defaults,
     )
     img = ImageChops.offset(img, int(round(oxf)), int(round(oyf)))
     img = ImageEnhance.Contrast(img).enhance(float(params.get("contrast", defaults["contrast"])))

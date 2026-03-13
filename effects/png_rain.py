@@ -1,8 +1,9 @@
-from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 import numpy as np
 import os, sys
+
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, film_grain, frame_params, integrated_motion_offset, integrated_rate_phase, max_numeric, min_numeric, motion_direction_rad_at, rotate_vector
+from _fxutil import add_glow, film_grain, frame_params, integrated_motion_offset, max_numeric, min_numeric, motion_direction_rad_at, rotate_vector
 
 
 def _visible_fraction(target: float, index: int) -> float:
@@ -39,7 +40,10 @@ def _load_sprite(path: str) -> Image.Image:
     if max_side > 96:
         scale = 96.0 / float(max_side)
         sprite = sprite.resize(
-            (max(1, int(round(sprite.size[0] * scale))), max(1, int(round(sprite.size[1] * scale)))),
+            (
+                max(1, int(round(sprite.size[0] * scale))),
+                max(1, int(round(sprite.size[1] * scale))),
+            ),
             resample=Image.Resampling.LANCZOS,
         )
     return sprite
@@ -69,7 +73,7 @@ def _sprite_variant(cache: dict, width: float, height: float, angle_deg: float, 
 
 
 def build_cache(w, h, frames, seed, params):
-    rng = np.random.default_rng(int(seed) & 0x7fffffff)
+    rng = np.random.default_rng(int(seed) & 0x7FFFFFFF)
     loop = bool(params.get("__loop__", False))
     max_density = max(0.2, max_numeric(params, "density", 1.0))
     max_count = max(24, int(round(84.0 * max_density)))
@@ -83,20 +87,22 @@ def build_cache(w, h, frames, seed, params):
     particles = []
     for idx in range(max_count):
         depth = float(rng.uniform(0.35, 1.0))
-        particles.append({
-            "index": idx,
-            "x0": float(rng.uniform(-margin, w + margin)),
-            "y0": float(rng.uniform(-h - margin * 1.5, h + margin)),
-            "depth": depth,
-            "size_mix": float(rng.uniform(0.0, 1.0)),
-            "speed_px": float(rng.uniform(h * 0.35, h * 1.15) * depth),
-            "width_mix": float(rng.uniform(0.65, 1.1)),
-            "stretch_mix": float(rng.uniform(0.85, 1.35)),
-            "alpha": float(rng.uniform(0.35, 0.95)),
-            "sway_amp": float(rng.uniform(6.0, 26.0) * depth),
-            "sway_rate": float(rng.uniform(0.08, 0.40)),
-            "phase": float(rng.uniform(0.0, 2.0 * np.pi)),
-        })
+        particles.append(
+            {
+                "index": idx,
+                "x0": float(rng.uniform(-margin, w + margin)),
+                "y0": float(rng.uniform(-h - margin * 1.5, h + margin)),
+                "depth": depth,
+                "size_mix": float(rng.uniform(0.0, 1.0)),
+                "speed_px": float(rng.uniform(h * 0.35, h * 1.15) * depth),
+                "width_mix": float(rng.uniform(0.65, 1.1)),
+                "stretch_mix": float(rng.uniform(0.85, 1.35)),
+                "alpha": float(rng.uniform(0.35, 0.95)),
+                "sway_amp": float(rng.uniform(6.0, 26.0) * depth),
+                "sway_rate": float(rng.uniform(0.08, 0.40)),
+                "phase": float(rng.uniform(0.0, 2.0 * np.pi)),
+            }
+        )
 
     return {
         "w": w,
@@ -133,6 +139,8 @@ def render_frame(cache, i):
     fps = max(1, int(cache.get("__fps__", 30)))
     n = max(1, int(cache.get("__frames__", frames)))
     t_sec = i / float(fps)
+    u = (i / float(max(1, n - 1))) if n > 1 else 0.0
+    duration_sec = max(1.0 / fps, (n - 1) / float(fps))
     params = frame_params(cache)
     defaults = cache["defaults"]
     speed = max(0.0, float(params.get("speed", defaults["speed"])))
@@ -152,6 +160,12 @@ def render_frame(cache, i):
     travel_w = w + 2.0 * cache["margin"]
     travel_h = h + 2.0 * cache["margin"]
 
+    def phase_from_rate(rate_hz):
+        scaled_rate = float(rate_hz) * speed
+        if loop:
+            return scaled_rate * duration_sec * u
+        return scaled_rate * t_sec
+
     layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
 
     for particle in cache["particles"]:
@@ -162,13 +176,10 @@ def render_frame(cache, i):
             cache,
             t_sec,
             0.0,
-            particle["speed_px"],
+            particle["speed_px"] * speed,
             default=defaults["motion_direction"],
-            y_scale_keys=("speed",),
-            scale_defaults=defaults,
         )
-        sway_phase = integrated_rate_phase(cache, t_sec, particle["sway_rate"], scale_keys=("speed",), scale_defaults=defaults, minimum=0.25)
-        sway = np.sin(2.0 * np.pi * sway_phase + particle["phase"]) * particle["sway_amp"]
+        sway = np.sin(2.0 * np.pi * phase_from_rate(particle["sway_rate"]) + particle["phase"]) * particle["sway_amp"]
         sway_dx, sway_dy = rotate_vector(sway, 0.0, motion_angle + np.pi * 0.5)
         x = ((particle["x0"] + dx + sway_dx + cache["margin"]) % travel_w) - cache["margin"]
         y = ((particle["y0"] + dy + sway_dy + cache["margin"]) % travel_h) - cache["margin"]

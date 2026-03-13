@@ -3,7 +3,7 @@ import numpy as np
 import os, sys
 
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, film_grain, frame_params, integrated_motion_offset, integrated_rate_phase, max_int, max_numeric
+from _fxutil import add_glow, film_grain, frame_params, integrated_motion_offset, max_int, max_numeric
 
 
 PALETTES = {
@@ -76,13 +76,20 @@ def render_frame(cache, i):
     duration_sec = max(1.0 / fps, (n - 1) / float(fps))
     params = frame_params(cache)
     defaults = cache["defaults"]
+    speed = max(0.0, float(params.get("speed", defaults["speed"])))
+
     def phase_from_rate(rate_hz):
-        return integrated_rate_phase(cache, t_sec, rate_hz, scale_keys=("speed",), scale_defaults=defaults)
+        scaled_rate = float(rate_hz) * speed
+        if loop:
+            return scaled_rate * duration_sec * u
+        return scaled_rate * t_sec
 
     count = min(float(cache["max_count"]), max(0.0, float(params.get("count", defaults["count"]))))
     size_min = max(0.1, float(params.get("size_min", defaults["size_min"])))
     size_max = max(size_min, float(params.get("size_max", defaults["size_max"])))
     twinkle = float(params.get("twinkle", defaults["twinkle"]))
+    drift_x = max(0.0, float(params.get("drift_x_cycles", defaults["drift_x_cycles"])))
+    drift_y = max(0.0, float(params.get("drift_y_cycles", defaults["drift_y_cycles"])))
     palette_name = str(params.get("palette", defaults["palette"]))
     pr, pg, pb = PALETTES.get(palette_name, PALETTES[defaults["palette"]])
 
@@ -97,12 +104,9 @@ def render_frame(cache, i):
         dx, dy = integrated_motion_offset(
             cache,
             t_sec,
-            w * particle["drift_fx"],
-            h * particle["drift_fy"],
+            w * particle["drift_fx"] * drift_x * speed,
+            h * particle["drift_fy"] * drift_y * speed,
             default=defaults["motion_direction"],
-            x_scale_keys=("drift_x_cycles", "speed"),
-            y_scale_keys=("drift_y_cycles", "speed"),
-            scale_defaults=defaults,
         )
         x = (particle["x0"] + dx) % w
         y = (particle["y0"] + dy) % h
