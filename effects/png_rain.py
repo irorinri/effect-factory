@@ -205,7 +205,7 @@ def build_cache(w, h, frames, seed, params):
     rng = np.random.default_rng(int(seed) & 0x7FFFFFFF)
     loop = bool(params.get("__loop__", False))
     max_density = max(0.2, max_numeric(params, "density", 1.0))
-    max_count = max(24, int(round(84.0 * max_density)))
+    target_count = max(24, int(round(84.0 * max_density)))
     min_size = max(4.0, min_numeric(params, "size_min", 12.0))
     max_size = max(min_size, max_numeric(params, "size_max", 30.0))
     max_length = max(0.5, max_numeric(params, "length", 1.8))
@@ -215,9 +215,10 @@ def build_cache(w, h, frames, seed, params):
     sprite = _load_sprite(sprite_path)
     sprite_w, sprite_h = sprite.size
     margin = max(64.0, max_size * max_length * 4.0)
-    formation_lanes = max(4, min(12, int(round(np.sqrt(max_count * max(0.65, w / max(1.0, h)))))))
-    formation_rows = max(1, int(np.ceil(max_count / formation_lanes)))
-    formation_slots = rng.permutation(formation_lanes * formation_rows)
+    formation_lanes = max(4, min(12, int(round(np.sqrt(target_count * max(0.65, w / max(1.0, h)))))))
+    formation_rows = max(1, int(np.ceil(target_count / formation_lanes)))
+    max_count = formation_lanes * formation_rows
+    particle_visibility_order = rng.permutation(max_count)
     ordered_speed_px = h * 0.78
     reference_angle = _formation_reference_angle(params, 12.0)
     ref_flow_x = float(np.cos(reference_angle))
@@ -236,7 +237,7 @@ def build_cache(w, h, frames, seed, params):
     particles = []
     for idx in range(max_count):
         depth = float(rng.uniform(0.35, 1.0))
-        slot_index = int(formation_slots[idx])
+        slot_index = idx
         slot_col = slot_index % formation_lanes
         slot_row = slot_index // formation_lanes
         formation_stagger = 0.5 if (slot_col % 2) else 0.0
@@ -250,7 +251,7 @@ def build_cache(w, h, frames, seed, params):
         random_y = ordered_y + ref_normal_y * offset_perpendicular + ref_flow_y * offset_parallel
         particles.append(
             {
-                "index": idx,
+                "index": int(particle_visibility_order[idx]),
                 "x0": float(random_x),
                 "y0": float(random_y),
                 "ordered_x": float(ordered_x),

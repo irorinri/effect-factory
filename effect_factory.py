@@ -419,7 +419,7 @@ class EffectFactoryApp(tk.Tk):
         self.presets = load_presets(self.presets_dir)
 
         self.ffmpeg_path = tk.StringVar(value="ffmpeg")
-        self.output_dir = tk.StringVar(value="C:\\Users\\iro\\Desktop\\共有素材\\effect素材")
+        self.output_dir = tk.StringVar(value="C:\\Users\\iro\\Desktop\\共有用\\effect素材")
         self.file_prefix = tk.StringVar(value="overlay")
         self.w = tk.IntVar(value=1920)
         self.h = tk.IntVar(value=1080)
