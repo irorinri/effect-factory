@@ -137,9 +137,11 @@ def render_frame(cache, i):
             dx, dy = integrated_motion_offset(
                 cache,
                 ts_t,
-                w * piece["kx"] * speed,
-                h * piece["ky"] * speed,
+                w * piece["kx"],
+                h * piece["ky"],
                 default=defaults["motion_direction"],
+                scale_key="speed",
+                scale_default=defaults["speed"],
             )
             x = (piece["x0"] + dx) % w
             y = (piece["y0"] + dy) % h

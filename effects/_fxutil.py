@@ -69,6 +69,27 @@ def _timeline_param_samples(source, key: str, default: float = 0.0):
     return merged
 
 
+def timeline_numeric_at(source, time_sec: float = None, key: str = "", default: float = 0.0) -> float:
+    if time_sec is None:
+        try:
+            return float(source.get(key, default))
+        except Exception:
+            return float(default)
+    samples = _timeline_param_samples(source, key, default)
+    if not samples:
+        return timeline_numeric_at(source, None, key=key, default=default)
+    if time_sec <= samples[0][0]:
+        return float(samples[0][1])
+    if time_sec >= samples[-1][0]:
+        return float(samples[-1][1])
+    for (left_time, left_value), (right_time, right_value) in zip(samples, samples[1:]):
+        if time_sec <= right_time + 1e-9:
+            span = max(1e-6, right_time - left_time)
+            mix = clamp01((float(time_sec) - left_time) / span)
+            return float(left_value) + (float(right_value) - float(left_value)) * mix
+    return float(samples[-1][1])
+
+
 def timeline_values(source, key: str, default=None):
     values = []
     if isinstance(source, dict) and key in source:
@@ -148,32 +169,35 @@ def motion_direction_rad_at(source, time_sec: float, key: str = "motion_directio
     return np.deg2rad(motion_direction_deg_at(source, float(time_sec), key=key, default=default))
 
 
-def _motion_direction_integral_state(cache: dict, key: str = "motion_direction", default: float = 0.0):
+def _motion_integral_state(cache: dict, key: str = "motion_direction", default: float = 0.0, scale_key: str = None, scale_default: float = 1.0):
     if not isinstance(cache, dict):
         return {"times": [0.0], "cos": [0.0], "sin": [0.0], "fps": 30.0}
-    states = cache.setdefault("__motion_direction_integrals__", {})
-    cache_key = (key, round(float(default), 6))
+    states = cache.setdefault("__motion_integrals__", {})
+    cache_key = (key, round(float(default), 6), str(scale_key or ""), round(float(scale_default), 6))
     if cache_key in states:
         return states[cache_key]
     fps = max(1, int(cache.get("__fps__", 30)))
     frames = max(1, int(cache.get("__frames__", cache.get("frames", 1))))
     times = [i / float(fps) for i in range(frames)]
     angles = [motion_direction_rad_at(cache, t, key=key, default=default) for t in times]
+    scales = [timeline_numeric_at(cache, t, key=scale_key, default=scale_default) if scale_key else 1.0 for t in times]
     cos_acc = [0.0] * frames
     sin_acc = [0.0] * frames
     dt = 1.0 / float(fps)
     for i in range(1, frames):
-        cos_acc[i] = cos_acc[i - 1] + 0.5 * (float(np.cos(angles[i - 1])) + float(np.cos(angles[i]))) * dt
-        sin_acc[i] = sin_acc[i - 1] + 0.5 * (float(np.sin(angles[i - 1])) + float(np.sin(angles[i]))) * dt
+        left_scale = float(scales[i - 1])
+        right_scale = float(scales[i])
+        cos_acc[i] = cos_acc[i - 1] + 0.5 * ((float(np.cos(angles[i - 1])) * left_scale) + (float(np.cos(angles[i])) * right_scale)) * dt
+        sin_acc[i] = sin_acc[i - 1] + 0.5 * ((float(np.sin(angles[i - 1])) * left_scale) + (float(np.sin(angles[i])) * right_scale)) * dt
     state = {"times": times, "cos": cos_acc, "sin": sin_acc, "fps": float(fps)}
     states[cache_key] = state
     return state
 
 
-def _motion_direction_integral_at(cache: dict, time_sec: float, key: str = "motion_direction", default: float = 0.0):
+def _motion_integral_at(cache: dict, time_sec: float, key: str = "motion_direction", default: float = 0.0, scale_key: str = None, scale_default: float = 1.0):
     if time_sec <= 0.0:
         return 0.0, 0.0
-    state = _motion_direction_integral_state(cache, key=key, default=default)
+    state = _motion_integral_state(cache, key=key, default=default, scale_key=scale_key, scale_default=scale_default)
     times = state["times"]
     cos_acc = state["cos"]
     sin_acc = state["sin"]
@@ -193,8 +217,15 @@ def _motion_direction_integral_at(cache: dict, time_sec: float, key: str = "moti
     return cos_val, sin_val
 
 
-def integrated_motion_offset(cache: dict, time_sec: float, vx_per_sec: float, vy_per_sec: float, key: str = "motion_direction", default: float = 0.0) -> tuple[float, float]:
-    cos_int, sin_int = _motion_direction_integral_at(cache, float(time_sec), key=key, default=default)
+def integrated_motion_offset(cache: dict, time_sec: float, vx_per_sec: float, vy_per_sec: float, key: str = "motion_direction", default: float = 0.0, scale_key: str = None, scale_default: float = 1.0) -> tuple[float, float]:
+    cos_int, sin_int = _motion_integral_at(
+        cache,
+        float(time_sec),
+        key=key,
+        default=default,
+        scale_key=scale_key,
+        scale_default=scale_default,
+    )
     vx = float(vx_per_sec)
     vy = float(vy_per_sec)
     return (vx * cos_int - vy * sin_int, vx * sin_int + vy * cos_int)

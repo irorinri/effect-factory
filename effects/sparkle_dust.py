@@ -104,9 +104,11 @@ def render_frame(cache, i):
         dx, dy = integrated_motion_offset(
             cache,
             t_sec,
-            w * particle["drift_fx"] * drift_x * speed,
-            h * particle["drift_fy"] * drift_y * speed,
+            w * particle["drift_fx"] * drift_x,
+            h * particle["drift_fy"] * drift_y,
             default=defaults["motion_direction"],
+            scale_key="speed",
+            scale_default=defaults["speed"],
         )
         x = (particle["x0"] + dx) % w
         y = (particle["y0"] + dy) % h

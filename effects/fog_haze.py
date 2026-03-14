@@ -78,9 +78,11 @@ def render_frame(cache, i):
     oxf, oyf = integrated_motion_offset(
         cache,
         t_sec,
-        w * float(params.get("drift_x_cycles", defaults["drift_x_cycles"])) * speed,
-        h * float(params.get("drift_y_cycles", defaults["drift_y_cycles"])) * speed,
+        w * float(params.get("drift_x_cycles", defaults["drift_x_cycles"])),
+        h * float(params.get("drift_y_cycles", defaults["drift_y_cycles"])),
         default=defaults["motion_direction"],
+        scale_key="speed",
+        scale_default=defaults["speed"],
     )
     img = ImageChops.offset(img, int(round(oxf)), int(round(oyf)))
     img = ImageEnhance.Contrast(img).enhance(float(params.get("contrast", defaults["contrast"])))

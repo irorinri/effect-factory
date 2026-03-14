@@ -79,7 +79,15 @@ def render_frame(cache, i):
 
     if noise_amount > 0:
         base_noise = cache["base_noise"]
-        oxf, oyf = integrated_motion_offset(cache, t_sec, 97.0 * speed, 41.0 * speed, default=defaults["motion_direction"])
+        oxf, oyf = integrated_motion_offset(
+            cache,
+            t_sec,
+            97.0,
+            41.0,
+            default=defaults["motion_direction"],
+            scale_key="speed",
+            scale_default=defaults["speed"],
+        )
         nn = np.roll(np.roll(base_noise, int(oxf) % w, axis=1), int(oyf) % h, axis=0)
         img += nn[..., None] * noise_amount * 0.75
 

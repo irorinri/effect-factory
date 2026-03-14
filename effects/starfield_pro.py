@@ -138,17 +138,41 @@ def render_frame(cache, i):
     out = Image.new("RGB", (w, h), (0, 0, 0))
 
     if nebula_strength > 0:
-        neb_dxf, neb_dyf = integrated_motion_offset(cache, t_sec, w * drift_x * speed, h * drift_y * speed, default=defaults["motion_direction"])
+        neb_dxf, neb_dyf = integrated_motion_offset(
+            cache,
+            t_sec,
+            w * drift_x,
+            h * drift_y,
+            default=defaults["motion_direction"],
+            scale_key="speed",
+            scale_default=defaults["speed"],
+        )
         neb_o = ImageChops.offset(cache["neb"], int(round(neb_dxf)), int(round(neb_dyf)))
         if nebula_strength != 1.0:
             neb_o = ImageEnhance.Brightness(neb_o).enhance(nebula_strength)
         out = ImageChops.add(out, neb_o)
 
-    tw_dxf, tw_dyf = integrated_motion_offset(cache, t_sec, w * speed, h * speed, default=defaults["motion_direction"])
+    tw_dxf, tw_dyf = integrated_motion_offset(
+        cache,
+        t_sec,
+        w,
+        h,
+        default=defaults["motion_direction"],
+        scale_key="speed",
+        scale_default=defaults["speed"],
+    )
     tw = ImageChops.offset(cache["tw_map"], int(round(tw_dxf)), int(round(tw_dyf)))
 
     def lay(layer_img, kx, ky, base_gain):
-        oxf, oyf = integrated_motion_offset(cache, t_sec, w * kx * speed, h * ky * speed, default=defaults["motion_direction"])
+        oxf, oyf = integrated_motion_offset(
+            cache,
+            t_sec,
+            w * kx,
+            h * ky,
+            default=defaults["motion_direction"],
+            scale_key="speed",
+            scale_default=defaults["speed"],
+        )
         layer = ImageChops.offset(layer_img, int(round(oxf)), int(round(oyf)))
         if twinkle_strength > 0:
             a = np.asarray(layer, dtype=np.float32) / 255.0

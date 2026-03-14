@@ -1,9 +1,10 @@
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter
 import numpy as np
 import os, sys
 
 sys.path.append(os.path.dirname(__file__))
 from _fxutil import add_glow, film_grain, frame_params, integrated_motion_offset, max_numeric, min_numeric, motion_direction_rad_at, rotate_vector
+from _rain_asset_shapes import make_builtin_rain_sprite, parse_builtin_rain_sprite_token
 
 
 def _visible_fraction(target: float, index: int) -> float:
@@ -11,16 +12,15 @@ def _visible_fraction(target: float, index: int) -> float:
 
 
 def _default_sprite() -> Image.Image:
-    img = Image.new("RGBA", (60, 96), (0, 0, 0, 0))
-    dr = ImageDraw.Draw(img)
-    dr.polygon([(30, 4), (46, 34), (14, 34)], fill=(255, 255, 255, 240))
-    dr.ellipse((12, 20, 48, 88), fill=(255, 255, 255, 230))
-    return img.filter(ImageFilter.GaussianBlur(radius=1.2))
+    return make_builtin_rain_sprite("drop", size=96)
 
 
 def _load_sprite(path: str) -> Image.Image:
     sprite = None
-    if path:
+    builtin_sprite = parse_builtin_rain_sprite_token(path)
+    if builtin_sprite:
+        sprite = make_builtin_rain_sprite(builtin_sprite, size=96)
+    if path and sprite is None:
         try:
             with Image.open(path) as src:
                 sprite = src.convert("RGBA")
@@ -154,7 +154,7 @@ def render_frame(cache, i):
     glow_strength = max(0.0, float(params.get("glow_strength", defaults["glow_strength"])))
     grain = max(0.0, float(params.get("grain", defaults["grain"])))
     motion_angle = motion_direction_rad_at(cache, t_sec, default=defaults["motion_direction"])
-    angle_deg = float(np.rad2deg(motion_angle))
+    angle_deg = -float(np.rad2deg(motion_angle))
     sprite_w, sprite_h = cache["sprite_size"]
     aspect = sprite_h / float(max(1, sprite_w))
     travel_w = w + 2.0 * cache["margin"]
@@ -176,8 +176,10 @@ def render_frame(cache, i):
             cache,
             t_sec,
             0.0,
-            particle["speed_px"] * speed,
+            particle["speed_px"],
             default=defaults["motion_direction"],
+            scale_key="speed",
+            scale_default=defaults["speed"],
         )
         sway = np.sin(2.0 * np.pi * phase_from_rate(particle["sway_rate"]) + particle["phase"]) * particle["sway_amp"]
         sway_dx, sway_dy = rotate_vector(sway, 0.0, motion_angle + np.pi * 0.5)

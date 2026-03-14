@@ -7,6 +7,8 @@ from tkinter import ttk, filedialog, messagebox
 import numpy as np
 from PIL import Image, ImageTk, ImageOps, ImageDraw
 
+from effects._rain_asset_shapes import builtin_rain_sprite_token, make_builtin_rain_sprite
+
 
 def _now_ts():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -357,11 +359,19 @@ class EffectFactoryApp(tk.Tk):
     EFFECT_ASSET_SPECS = {
         "png_rain": {
             "runtime_key": "particle_sprite_path",
-            "label": "雨粒PNG",
+            "label": "雨粒画像",
+            "picker_title": "雨粒の画像を選択",
             "dialog_title": "雨粒に使う透過PNGを選択",
-            "button": "PNGを選ぶ",
-            "hint": "選んだ透過PNGが雨粒として使われます。未選択のときは内蔵しずくを使います。",
+            "button": "形/PNGを選ぶ",
+            "hint": "星・丸・四角などの内蔵形状か、これまでどおり任意の透過PNGを雨粒に使えます。未選択のときは標準のしずくを使います。",
             "filetypes": [("透過PNG", "*.png"), ("PNG", "*.png")],
+            "default_builtin": builtin_rain_sprite_token("drop"),
+            "builtin_choices": [
+                {"token": builtin_rain_sprite_token("drop"), "label": "しずく", "help": "標準の雨粒"},
+                {"token": builtin_rain_sprite_token("circle"), "label": "丸", "help": "やわらかい粒"},
+                {"token": builtin_rain_sprite_token("square"), "label": "四角", "help": "ピクセル風の粒"},
+                {"token": builtin_rain_sprite_token("star"), "label": "星", "help": "きらっとした粒"},
+            ],
         },
     }
 
@@ -1374,7 +1384,7 @@ class EffectFactoryApp(tk.Tk):
             self._update_selection_labels()
             self._clear_timeline_markers(message="見た目変更に合わせてタイムラインを初期化しました", request_preview=False, schedule_history=False)
             if self._effect_asset_spec(item["effect_id"]):
-                self._choose_effect_asset(item["effect_id"], force_dialog=True)
+                self._choose_effect_asset(item["effect_id"])
             self._request_preview_rebuild()
         self._refresh_gallery_selection()
         self._schedule_history("select")
@@ -1398,7 +1408,7 @@ class EffectFactoryApp(tk.Tk):
         asset_path = self._effect_asset_path(plugin.id)
         meta_text = f"{category} / {usage} / effect: {plugin.name}"
         if asset_path:
-            meta_text += f" / PNG: {os.path.basename(asset_path)}"
+            meta_text += f" / 画像: {self._effect_asset_display_name(plugin.id, asset_path)}"
         self.selected_title.configure(text=selected_name)
         self.selected_meta.configure(text=meta_text)
         summary_parts = [
@@ -1410,11 +1420,11 @@ class EffectFactoryApp(tk.Tk):
             "params=" + ", ".join(p["key"] for p in plugin.params),
         ]
         if asset_path:
-            summary_parts.append(f"particle_png={os.path.basename(asset_path)}")
+            summary_parts.append(f"particle_asset={self._effect_asset_display_name(plugin.id, asset_path)}")
         self.selection_summary.set(" | ".join(summary_parts))
         preview_text = f"{plugin.name} を表示中。下のタイムラインで X / Y / Z に変化も記憶できます。"
         if self._effect_asset_spec(plugin.id):
-            preview_text += " 透過PNGを選ぶと、その画像が雨粒として使われます。"
+            preview_text += " 星・丸・四角などの内蔵形状か、透過PNGを選ぶと、その画像が雨粒として使われます。"
         self.preview_info.set(preview_text)
         self._refresh_effect_asset_ui()
 
@@ -1900,6 +1910,178 @@ class EffectFactoryApp(tk.Tk):
     def _effect_asset_path(self, eff_id: str = None) -> str:
         return str(self.effect_asset_paths.get((eff_id or self.effect_id.get()), "") or "")
 
+    def _effect_asset_builtin_choices(self, eff_id: str = None) -> list[dict]:
+        spec = self._effect_asset_spec(eff_id)
+        return list(spec.get("builtin_choices") or []) if spec else []
+
+    def _effect_asset_builtin_choice(self, eff_id: str = None, value: str = None):
+        raw = self._effect_asset_path(eff_id) if value is None else str(value or "").strip()
+        for choice in self._effect_asset_builtin_choices(eff_id):
+            if choice.get("token") == raw:
+                return choice
+        return None
+
+    def _effect_asset_display_name(self, eff_id: str = None, value: str = None, include_default: bool = False) -> str:
+        raw = self._effect_asset_path(eff_id) if value is None else str(value or "").strip()
+        choice = self._effect_asset_builtin_choice(eff_id, raw)
+        if choice:
+            return f"{choice['label']}（内蔵）"
+        if raw:
+            return os.path.basename(raw)
+        if include_default:
+            spec = self._effect_asset_spec(eff_id) or {}
+            default_choice = self._effect_asset_builtin_choice(eff_id, spec.get("default_builtin", ""))
+            if default_choice:
+                return f"未選択（{default_choice['label']}）"
+        return "未選択"
+
+    def _effect_asset_entry_text(self, eff_id: str = None, value: str = None) -> str:
+        raw = self._effect_asset_path(eff_id) if value is None else str(value or "").strip()
+        choice = self._effect_asset_builtin_choice(eff_id, raw)
+        if choice:
+            return f"内蔵プリセット: {choice['label']}"
+        if raw:
+            return raw
+        return "未選択。右のボタンから形か透過PNGを選べます"
+
+    def _make_effect_asset_builtin_preview(self, choice: dict) -> ImageTk.PhotoImage:
+        canvas = Image.new("RGBA", (96, 96), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(canvas)
+        draw.rounded_rectangle((3, 3, 93, 93), radius=18, fill=(18, 28, 38, 255), outline=(83, 114, 141, 255), width=2)
+        sprite = make_builtin_rain_sprite(choice.get("token", ""), size=72)
+        sprite = ImageOps.contain(sprite, (54, 54), method=Image.Resampling.LANCZOS)
+        left = (canvas.size[0] - sprite.size[0]) // 2
+        top = (canvas.size[1] - sprite.size[1]) // 2
+        canvas.alpha_composite(sprite, dest=(left, top))
+        return ImageTk.PhotoImage(canvas)
+
+    def _ask_effect_asset_file(self, eff_id: str, parent=None) -> str:
+        spec = self._effect_asset_spec(eff_id)
+        if not spec:
+            return ""
+        chosen = filedialog.askopenfilename(
+            parent=parent,
+            title=spec["dialog_title"],
+            filetypes=spec.get("filetypes") or [("PNG", "*.png")],
+        )
+        if not chosen:
+            return ""
+        chosen = os.path.abspath(chosen)
+        if not chosen.lower().endswith(".png"):
+            messagebox.showerror("エラー", "PNGファイルを選択してください。", parent=parent or self)
+            return ""
+        return chosen
+
+    def _show_effect_asset_picker(self, eff_id: str):
+        spec = self._effect_asset_spec(eff_id)
+        if not spec:
+            return None
+        choices = self._effect_asset_builtin_choices(eff_id)
+        if not choices:
+            chosen = self._ask_effect_asset_file(eff_id, parent=self)
+            return chosen or None
+        dialog = tk.Toplevel(self)
+        dialog.title(spec.get("picker_title") or spec.get("dialog_title") or "素材を選択")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.geometry(f"+{self.winfo_rootx() + 110}+{self.winfo_rooty() + 90}")
+        result = {"value": None}
+
+        def close_dialog():
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+
+        def choose_value(value):
+            result["value"] = value
+            close_dialog()
+
+        def choose_file():
+            chosen_path = self._ask_effect_asset_file(eff_id, parent=dialog)
+            if chosen_path:
+                result["value"] = chosen_path
+                close_dialog()
+
+        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+        dialog.bind("<Escape>", lambda _evt: close_dialog())
+        body = ttk.Frame(dialog, padding=14)
+        body.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(body, text=spec.get("picker_title") or "画像を選択", font=("", 12, "bold")).pack(anchor="w")
+        ttk.Label(
+            body,
+            text=f"現在: {self._effect_asset_display_name(eff_id, include_default=True)}",
+            foreground="#8193a0",
+        ).pack(anchor="w", pady=(2, 10))
+
+        grid = ttk.Frame(body)
+        grid.pack(fill="x")
+        for col in range(2):
+            grid.columnconfigure(col, weight=1)
+        photo_refs = []
+        for idx, choice in enumerate(choices):
+            card = ttk.Frame(grid)
+            row = idx // 2
+            col = idx % 2
+            card.grid(row=row, column=col, padx=6, pady=6, sticky="nsew")
+            photo = self._make_effect_asset_builtin_preview(choice)
+            photo_refs.append(photo)
+            btn = ttk.Button(
+                card,
+                text=choice["label"],
+                image=photo,
+                compound="top",
+                command=lambda token=choice["token"]: choose_value(token),
+                width=12,
+            )
+            btn.image = photo
+            btn.pack(fill="x")
+            ttk.Label(card, text=choice.get("help", ""), foreground="#8193a0", justify="center").pack(pady=(4, 0))
+        dialog._photo_refs = photo_refs
+
+        ttk.Separator(body, orient="horizontal").pack(fill="x", pady=10)
+        ttk.Label(body, text="これまでどおり任意の透過PNGも使えます。", foreground="#8193a0").pack(anchor="w")
+        actions = ttk.Frame(body)
+        actions.pack(fill="x", pady=(8, 0))
+        ttk.Button(actions, text="透過PNGを選ぶ...", command=choose_file).pack(side="left")
+        ttk.Button(actions, text="キャンセル", command=close_dialog).pack(side="right")
+
+        dialog.update_idletasks()
+        try:
+            dialog.grab_set()
+        except Exception:
+            pass
+        dialog.focus_set()
+        self.wait_window(dialog)
+        return result["value"]
+
+    def _apply_effect_asset_choice(self, eff_id: str, chosen):
+        spec = self._effect_asset_spec(eff_id)
+        if not spec:
+            return ""
+        existing = self._effect_asset_path(eff_id).strip()
+        normalized = str(chosen or "").strip()
+        if not normalized:
+            self._refresh_effect_asset_ui()
+            return existing
+        if not self._effect_asset_builtin_choice(eff_id, normalized):
+            normalized = os.path.abspath(normalized)
+            if not normalized.lower().endswith(".png"):
+                messagebox.showerror("エラー", "PNGファイルを選択してください。")
+                self._refresh_effect_asset_ui()
+                return existing
+        if normalized == existing:
+            self._refresh_effect_asset_ui()
+            return normalized
+        self.effect_asset_paths[eff_id] = normalized
+        self._refresh_effect_asset_ui()
+        self._update_selection_labels()
+        self._refresh_effect_thumb(eff_id)
+        self._schedule_history("edit")
+        self._request_preview_rebuild(immediate=True)
+        return normalized
+
     def _effect_runtime_extras(self, eff_id: str) -> dict:
         spec = self._effect_asset_spec(eff_id)
         if not spec:
@@ -1920,8 +2102,8 @@ class EffectFactoryApp(tk.Tk):
                 pass
             return
         path = self._effect_asset_path()
-        self.effect_asset_title.set(f"{spec['label']}: {os.path.basename(path) if path else '未選択'}")
-        self.effect_asset_path_text.set(path or "未選択。右のボタンから選べます")
+        self.effect_asset_title.set(f"{spec['label']}: {self._effect_asset_display_name(value=path, include_default=True)}")
+        self.effect_asset_path_text.set(self._effect_asset_entry_text(value=path))
         self.effect_asset_hint.set(spec["hint"])
         self.effect_asset_button.configure(text=spec["button"])
         self.effect_asset_box.pack_forget()
@@ -1936,37 +2118,21 @@ class EffectFactoryApp(tk.Tk):
             self._queue_thumb(item)
 
     def _choose_current_effect_asset(self):
-        self._choose_effect_asset(self.effect_id.get(), force_dialog=True)
+        self._choose_effect_asset(self.effect_id.get())
 
-    def _choose_effect_asset(self, eff_id: str, force_dialog: bool = True):
+    def _choose_effect_asset(self, eff_id: str, mode: str = "picker"):
         spec = self._effect_asset_spec(eff_id)
         if not spec:
             return ""
         existing = self._effect_asset_path(eff_id)
-        chosen = existing
-        if force_dialog or not existing:
-            chosen = filedialog.askopenfilename(
-                title=spec["dialog_title"],
-                filetypes=spec.get("filetypes") or [("PNG", "*.png")],
-            )
+        if mode == "file":
+            chosen = self._ask_effect_asset_file(eff_id, parent=self) or None
+        else:
+            chosen = self._show_effect_asset_picker(eff_id)
         if not chosen:
             self._refresh_effect_asset_ui()
             return existing
-        chosen = os.path.abspath(chosen)
-        if not chosen.lower().endswith(".png"):
-            messagebox.showerror("エラー", "PNGファイルを選択してください。")
-            self._refresh_effect_asset_ui()
-            return existing
-        if os.path.abspath(existing or "") == chosen:
-            self._refresh_effect_asset_ui()
-            return chosen
-        self.effect_asset_paths[eff_id] = chosen
-        self._refresh_effect_asset_ui()
-        self._update_selection_labels()
-        self._refresh_effect_thumb(eff_id)
-        self._schedule_history("edit")
-        self._request_preview_rebuild(immediate=True)
-        return chosen
+        return self._apply_effect_asset_choice(eff_id, chosen)
 
     def _resolve_params_for_state(self, plugin, preset, fixed_params, param_overrides, rng: np.random.Generator):
         ranges = (preset or {}).get("params", {})
