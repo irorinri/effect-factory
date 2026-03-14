@@ -673,7 +673,7 @@ class EffectFactoryApp(tk.Tk):
         self.btn_timeline_clear.pack(side="left", padx=(12, 0))
         ttk.Label(marker_row, text="X / Y / Z を右へドラッグすると xx / yy / zz の保持区間を作れます。", foreground="#7d8d9a").pack(side="left", padx=(12, 0))
 
-        self.timeline_canvas = tk.Canvas(timeline, height=72, bg="#10161d", bd=0, highlightthickness=0, cursor="hand2")
+        self.timeline_canvas = tk.Canvas(timeline, height=72, bg="#ffffff", bd=0, highlightthickness=0, cursor="hand2")
         self.timeline_canvas.pack(fill="x", padx=10, pady=(0, 10))
         self.timeline_canvas.bind("<Configure>", lambda _e: self._refresh_timeline_ui())
         self.timeline_canvas.bind("<Button-1>", self._on_timeline_press)
@@ -1015,7 +1015,7 @@ class EffectFactoryApp(tk.Tk):
         duration = self._timeline_duration()
         playhead_x = self._timeline_seconds_to_x(float(self.timeline_position.get()))
         selected_base = self._timeline_marker_base_label(self.timeline_selected_marker) if self.timeline_selected_marker else ""
-        canvas.create_line(left, y, right, y, fill="#42505e", width=4, capstyle="round")
+        canvas.create_line(left, y, right, y, fill="#c8d1da", width=4, capstyle="round")
         for base_label in self.TIMELINE_MARKERS:
             hold_label = self._timeline_marker_hold_label(base_label)
             base_marker = self.timeline_markers.get(base_label)
@@ -1027,14 +1027,14 @@ class EffectFactoryApp(tk.Tk):
             if x1 > x0 + 1e-3:
                 canvas.create_line(x0, y, x1, y, fill=self._timeline_marker_color(base_label), width=(6 if selected_base == base_label else 4), capstyle="round")
         canvas.create_line(left, y, playhead_x, y, fill="#86c5ff", width=4, capstyle="round")
-        canvas.create_line(playhead_x, y - 18, playhead_x, y + 18, fill="#f2f6fb", width=2)
-        canvas.create_oval(playhead_x - 5, y - 5, playhead_x + 5, y + 5, fill="#f2f6fb", outline="")
+        canvas.create_line(playhead_x, y - 18, playhead_x, y + 18, fill="#163042", width=2)
+        canvas.create_oval(playhead_x - 5, y - 5, playhead_x + 5, y + 5, fill="#163042", outline="")
         for item in self._active_timeline_markers():
             mx = self._timeline_seconds_to_x(item["time_sec"])
             color = self._timeline_marker_color(item["label"])
             is_hold = self._timeline_marker_is_hold(item["label"])
             selected = bool(selected_base) and self._timeline_marker_base_label(item["label"]) == selected_base
-            outline = "#f7fbff" if selected else "#10161d"
+            outline = "#163042" if selected else "#f7fbff"
             text_color = "#10161d" if selected else "#f7fbff"
             half_w = 9 if is_hold else 11
             half_h = 12 if is_hold else 14
@@ -1042,8 +1042,8 @@ class EffectFactoryApp(tk.Tk):
             canvas.create_polygon(mx, y - half_h, mx + half_w, y, mx, y + half_h, mx - half_w, y, fill=color, outline=outline, width=(2 if selected else 1))
             canvas.create_text(mx, y, text=item["label"], fill=text_color, font=("", font_size, "bold"))
             canvas.create_text(mx, y - 22, text=self._format_seconds(item["time_sec"]), fill=color, font=("", 9))
-        canvas.create_text(left, y + 24, text="0s", anchor="w", fill="#8fa0ad", font=("", 9))
-        canvas.create_text(right, y + 24, text=self._format_seconds(duration), anchor="e", fill="#8fa0ad", font=("", 9))
+        canvas.create_text(left, y + 24, text="0s", anchor="w", fill="#64727f", font=("", 9))
+        canvas.create_text(right, y + 24, text=self._format_seconds(duration), anchor="e", fill="#64727f", font=("", 9))
 
     def _find_timeline_marker_hit(self, x: float, y: float):
         if abs(float(y) - 38.0) > 24.0:
@@ -1513,7 +1513,8 @@ class EffectFactoryApp(tk.Tk):
         defs = [
             ("density", "密度", "粒や模様の数を増減します", ["density", "count", "strength", "intensity"]),
             ("size", "サイズ", "要素の大きさや太さです", ["width", "size_max", "size_min"]),
-            ("length", "長さ", "光の棒の長さです", ["length"]),
+            ("size_randomness", "サイズランダム", "左で均一、右で粒ごとのサイズ差が増えます", ["size_randomness"]),
+            ("length", "尾引き", "粒の流れ方向に出る尾を調整します", ["length"]),
             ("speed", "速度", "動きの速さです", ["speed", "sweep"]),
             ("speed_randomness", "速度ランダム", "左で同じ速さ、右で粒ごとの速度差が増えます", ["speed_randomness"]),
             ("direction", "向き", "動きの向きを回転します", ["motion_direction"]),
@@ -1531,7 +1532,8 @@ class EffectFactoryApp(tk.Tk):
             out.append({"id": cid, "label": label, "help": help_text, "keys": match})
             used.update(match)
         out.append({"id": "loop_length", "label": "ループ長", "help": "何秒で自然につながるかを決めます", "duration": True})
-        return out[:10]
+        limit = 11 if plugin.id == "png_rain" else 10
+        return out[:limit]
 
     def _build_quick_controls(self, plugin):
         specs = self._quick_specs(plugin)
@@ -1615,7 +1617,6 @@ class EffectFactoryApp(tk.Tk):
         slider_value = sum(normalized) / len(normalized)
         scale_var = tk.DoubleVar(value=slider_value)
         value = ttk.Label(row, width=8, text=f"{slider_value * 100:.0f}%")
-        value.pack(side="left")
 
         def apply_size(_v=None):
             pos = float(scale_var.get())
@@ -1641,6 +1642,7 @@ class EffectFactoryApp(tk.Tk):
             value.configure(text=f"{pos * 100:.0f}%")
 
         ttk.Scale(row, from_=0.0, to=1.0, variable=scale_var, command=lambda _v=None: (apply_size(), self._on_ui_value_changed())).pack(side="left", fill="x", expand=True, padx=8)
+        value.pack(side="left")
         for k in keys:
             self.param_vars[k].trace_add("write", sync_size)
         sync_size()
@@ -1650,8 +1652,8 @@ class EffectFactoryApp(tk.Tk):
             "brightness": "明るさ", "speed": "速度", "grain": "グレイン", "glow": "グロー",
             "glow_strength": "グロー強さ", "glow_radius": "グロー広がり", "mblur_samples": "モーションブラー",
             "layers": "奥行きレイヤ数", "blur_far": "遠景ぼけ", "blur_mid": "中景ぼけ", "blur_near": "近景ぼけ",
-            "drift_x_cycles": "横移動", "drift_y_cycles": "縦移動", "size_min": "最小サイズ", "size_max": "最大サイズ",
-            "count": "数", "density": "密度", "palette": "色プリセット", "tint": "色味", "length": "長さ", "motion_direction": "動きの向き", "speed_randomness": "速度ランダム", "grid_alignment": "ランダム/整列", "cohesion_dispersion": "発散/凝集", "cohesion": "凝集", "dispersion": "発散"
+            "drift_x_cycles": "横移動", "drift_y_cycles": "縦移動", "size_min": "最小サイズ", "size_max": "最大サイズ", "size_randomness": "サイズランダム",
+            "count": "数", "density": "密度", "palette": "色プリセット", "tint": "色味", "length": "尾引き", "motion_direction": "動きの向き", "speed_randomness": "速度ランダム", "grid_alignment": "ランダム/整列", "cohesion_dispersion": "発散/凝集", "cohesion": "凝集", "dispersion": "発散"
         }.get(p["key"], p.get("label", p["key"]))
 
     def _on_ui_value_changed(self):
@@ -1811,7 +1813,7 @@ class EffectFactoryApp(tk.Tk):
         ratio = {"弱め": 0.18, "ふつう": 0.33, "強め": 0.52}.get(self.random_strength.get(), 0.33)
         groups = {
             "color": {"color", "tint", "palette", "tint_r", "tint_g", "tint_b", "nebula_r", "nebula_g", "nebula_b"},
-            "shape": {"count", "density", "size_min", "size_max", "width", "length", "layers", "shooting_stars"},
+            "shape": {"count", "density", "size_min", "size_max", "size_randomness", "width", "length", "layers", "shooting_stars"},
             "motion": {"speed", "speed_randomness", "sweep", "flicker", "twinkle", "drift_x_cycles", "drift_y_cycles", "tear_prob", "motion_direction", "grid_alignment", "cohesion_dispersion", "cohesion", "dispersion"},
         }
         locked = set()

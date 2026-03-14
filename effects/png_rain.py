@@ -27,6 +27,19 @@ def _closest_tiled_coordinate(value: float, reference: float, period: float) -> 
         return float(value)
     return float(value) + float(period) * float(np.round((float(reference) - float(value)) / float(period)))
 
+def _trail_samples(span: float) -> list[tuple[float, float]]:
+    span = max(0.0, float(span))
+    if span <= 0.5:
+        return [(0.0, 1.0)]
+    return [
+        (-0.5 * span, 0.12),
+        (-0.25 * span, 0.18),
+        (0.0, 0.40),
+        (0.25 * span, 0.18),
+        (0.5 * span, 0.12),
+    ]
+
+
 
 def _formation_reference_angle(params, default: float = 0.0) -> float:
     try:
@@ -155,7 +168,7 @@ def _load_sprite(path: str) -> Image.Image:
     return sprite
 
 
-def _sprite_variant(cache: dict, width: float, height: float, angle_deg: float, alpha_mix: float, preserve_aspect: bool = False) -> Image.Image:
+def _sprite_geometry_variant(cache: dict, width: float, height: float, angle_deg: float, preserve_aspect: bool = False) -> Image.Image:
     if preserve_aspect:
         width = max(1, int(round(float(width))))
         height = max(1, int(round(float(height))))
@@ -163,22 +176,28 @@ def _sprite_variant(cache: dict, width: float, height: float, angle_deg: float, 
         width = max(1, int(round(float(width) / 2.0) * 2))
         height = max(1, int(round(float(height) / 2.0) * 2))
     angle_key = int(round(float(angle_deg))) % 360
-    alpha_key = max(1, min(16, int(round(float(np.clip(alpha_mix, 0.0, 1.0)) * 16.0))))
     variants = cache.setdefault("__sprite_variants__", {})
-    key = (width, height, angle_key, alpha_key)
+    key = (width, height, angle_key)
     img = variants.get(key)
     if img is not None:
         return img
     img = cache["sprite"].resize((width, height), resample=Image.Resampling.LANCZOS)
     if angle_key:
         img = img.rotate(angle_key, resample=Image.Resampling.BICUBIC, expand=True)
-    if alpha_key < 16:
-        scale = alpha_key / 16.0
-        alpha = img.getchannel("A").point(lambda px, s=scale: int(px * s))
-        img.putalpha(alpha)
     if len(variants) > 512:
         variants.clear()
     variants[key] = img
+    return img
+
+
+def _sprite_variant(cache: dict, width: float, height: float, angle_deg: float, alpha_mix: float, preserve_aspect: bool = False) -> Image.Image:
+    base = _sprite_geometry_variant(cache, width, height, angle_deg, preserve_aspect=preserve_aspect)
+    scale = float(np.clip(alpha_mix, 0.0, 1.0))
+    if scale >= 0.999:
+        return base
+    img = base.copy()
+    alpha = img.getchannel("A").point(lambda px, s=scale: int(round(px * s)))
+    img.putalpha(alpha)
     return img
 
 
@@ -267,6 +286,7 @@ def build_cache(w, h, frames, seed, params):
             "density": float(params.get("density", 1.0)),
             "size_min": float(params.get("size_min", 12.0)),
             "size_max": float(params.get("size_max", 30.0)),
+            "size_randomness": float(np.clip(params.get("size_randomness", 0.0), 0.0, 1.0)),
             "length": float(params.get("length", 1.8)),
             "blur": float(params.get("blur", 0.2)),
             "grain": float(params.get("grain", 0.02)),
@@ -295,6 +315,7 @@ def render_frame(cache, i):
     visible_target = min(float(len(cache["particles"])), len(cache["particles"]) * density / max(1e-6, cache["max_density"]))
     size_min = max(2.0, float(params.get("size_min", defaults["size_min"])))
     size_max = max(size_min, float(params.get("size_max", defaults["size_max"])))
+    size_randomness = float(np.clip(params.get("size_randomness", defaults["size_randomness"]), 0.0, 1.0))
     length = max(0.3, float(params.get("length", defaults["length"])))
     blur = max(0.0, float(params.get("blur", defaults["blur"])))
     glow_radius = max(0.0, float(params.get("glow_radius", defaults["glow_radius"])))
@@ -309,10 +330,10 @@ def render_frame(cache, i):
     travel_h = h + 2.0 * cache["margin"]
 
     def phase_from_rate(rate_hz):
-        scaled_rate = float(rate_hz) * speed
+        base_rate = float(rate_hz)
         if loop:
-            return scaled_rate * duration_sec * u
-        return scaled_rate * t_sec
+            return base_rate * duration_sec * u
+        return base_rate * t_sec
 
     common_dx, common_dy = integrated_motion_offset(
         cache,
@@ -325,6 +346,7 @@ def render_frame(cache, i):
     )
 
     layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    alignment_random_mix = (1.0 - grid_alignment) ** 2
 
     for particle in cache["particles"]:
         vis = _visible_fraction(visible_target, particle["index"])
@@ -344,7 +366,7 @@ def render_frame(cache, i):
             motion_dy = common_dy + random_speed_dy
         else:
             motion_dx, motion_dy = common_dx, common_dy
-        random_sway = np.sin(2.0 * np.pi * phase_from_rate(particle["sway_rate"]) + particle["phase"]) * particle["sway_amp"] * (1.0 - grid_alignment)
+        random_sway = np.sin(2.0 * np.pi * phase_from_rate(particle["sway_rate"]) + particle["phase"]) * particle["sway_amp"] * alignment_random_mix
         random_sway_dx, random_sway_dy = rotate_vector(random_sway, 0.0, motion_angle + np.pi * 0.5)
         random_x = particle["x0"] + motion_dx + random_sway_dx
         random_y = particle["y0"] + motion_dy + random_sway_dy
@@ -357,20 +379,32 @@ def render_frame(cache, i):
         x = ((x + cache["margin"]) % travel_w) - cache["margin"]
         y = ((y + cache["margin"]) % travel_h) - cache["margin"]
 
-        size = size_min + particle["size_mix"] * (size_max - size_min)
-        width = max(2.0, size * particle["width_mix"])
+        size_mix = 0.5 + (particle["size_mix"] - 0.5) * size_randomness
+        size = size_min + size_mix * (size_max - size_min)
+        width_mix = 1.0 + (particle["width_mix"] - 1.0) * size_randomness
+        width = max(2.0, size * width_mix)
         base_height = width * aspect
-        if cache.get("preserve_sprite_aspect", False):
-            height = base_height
-        else:
-            height = max(base_height, width * length * particle["stretch_mix"])
         alpha_mix = particle["alpha"] * vis * (0.6 + 0.4 * particle["depth"])
         if alpha_mix <= 0.02:
             continue
-        stamp = _sprite_variant(cache, width, height, angle_deg, alpha_mix, preserve_aspect=cache.get("preserve_sprite_aspect", False))
-        left = int(round(x - stamp.size[0] * 0.5))
-        top = int(round(y - stamp.size[1] * 0.5))
-        layer.alpha_composite(stamp, dest=(left, top))
+        if cache.get("preserve_sprite_aspect", False):
+            height = base_height
+            trail_span = max(0.0, max(base_height, width * length * particle["stretch_mix"]) - base_height)
+            for trail_offset, trail_weight in _trail_samples(trail_span):
+                trail_alpha = alpha_mix * trail_weight
+                if trail_alpha <= 0.01:
+                    continue
+                stamp = _sprite_variant(cache, width, height, angle_deg, trail_alpha, preserve_aspect=True)
+                offset_x, offset_y = rotate_vector(0.0, trail_offset, motion_angle)
+                left = int(round((x + offset_x) - stamp.size[0] * 0.5))
+                top = int(round((y + offset_y) - stamp.size[1] * 0.5))
+                layer.alpha_composite(stamp, dest=(left, top))
+        else:
+            height = max(base_height, width * length * particle["stretch_mix"])
+            stamp = _sprite_variant(cache, width, height, angle_deg, alpha_mix, preserve_aspect=False)
+            left = int(round(x - stamp.size[0] * 0.5))
+            top = int(round(y - stamp.size[1] * 0.5))
+            layer.alpha_composite(stamp, dest=(left, top))
 
     if blur > 0.0:
         layer = layer.filter(ImageFilter.GaussianBlur(radius=blur))
@@ -396,7 +430,8 @@ EFFECT = {
         {"key": "density", "label": "Density", "type": "float", "default": 1.0, "min": 0.2, "max": 2.5, "step": 0.1},
         {"key": "size_min", "label": "Min Size", "type": "float", "default": 12.0, "min": 4.0, "max": 48.0, "step": 1.0},
         {"key": "size_max", "label": "Max Size", "type": "float", "default": 30.0, "min": 8.0, "max": 96.0, "step": 1.0},
-        {"key": "length", "label": "Length", "type": "float", "default": 1.8, "min": 0.5, "max": 4.0, "step": 0.1},
+        {"key": "size_randomness", "label": "Size Randomness", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05},
+        {"key": "length", "label": "Trail", "type": "float", "default": 1.8, "min": 0.5, "max": 4.0, "step": 0.1},
         {"key": "blur", "label": "Blur", "type": "float", "default": 0.2, "min": 0.0, "max": 6.0, "step": 0.1},
         {"key": "glow_radius", "label": "Glow Radius", "type": "float", "default": 3.0, "min": 0.0, "max": 16.0, "step": 0.5},
         {"key": "glow_strength", "label": "Glow Strength", "type": "float", "default": 0.0, "min": 0.0, "max": 2.0, "step": 0.05},

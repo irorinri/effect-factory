@@ -1,4 +1,4 @@
-import math
+﻿import math
 
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -59,26 +59,33 @@ def make_builtin_rain_sprite(sprite_id: str, size: int = 96) -> Image.Image:
             points.append((cx + math.cos(angle) * radius, cy + math.sin(angle) * radius))
         draw.polygon(points, fill=fill)
         return _finalize_sprite(img, blur_radius=size / 150.0)
-    top = size * 0.10
-    body_top = size * 0.28
-    body_bottom = size * 0.88
-    tip_half = size * 0.18
-    body_half = size * 0.24
+    # Blend the tip into the body with overlapping fills so the built-in drop reads as one shape.
     draw.polygon(
         [
-            (size / 2.0, top),
-            (size / 2.0 + tip_half, body_top),
-            (size / 2.0 - tip_half, body_top),
+            (size * 0.50, size * 0.06),
+            (size * 0.65, size * 0.24),
+            (size * 0.61, size * 0.42),
+            (size * 0.39, size * 0.42),
+            (size * 0.35, size * 0.24),
         ],
-        fill=(255, 255, 255, 244),
+        fill=(255, 255, 255, 240),
     )
     draw.ellipse(
         (
-            size / 2.0 - body_half,
-            body_top - size * 0.02,
-            size / 2.0 + body_half,
-            body_bottom,
+            size * 0.31,
+            size * 0.20,
+            size * 0.69,
+            size * 0.60,
         ),
-        fill=(255, 255, 255, 232),
+        fill=(255, 255, 255, 238),
+    )
+    draw.ellipse(
+        (
+            size * 0.22,
+            size * 0.32,
+            size * 0.78,
+            size * 0.94,
+        ),
+        fill=(255, 255, 255, 234),
     )
     return _finalize_sprite(img, blur_radius=size / 96.0)
