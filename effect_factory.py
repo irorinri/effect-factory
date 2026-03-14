@@ -1,4 +1,4 @@
-﻿import os, json, time, queue, threading, subprocess, hashlib, importlib.util, zipfile
+import os, json, time, queue, threading, subprocess, hashlib, importlib.util, zipfile
 from dataclasses import dataclass
 from datetime import datetime
 import tkinter as tk
@@ -362,6 +362,7 @@ class EffectFactoryApp(tk.Tk):
             "label": "雨粒画像",
             "picker_title": "雨粒の画像を選択",
             "dialog_title": "雨粒に使う透過PNGを選択",
+            "auto_pick_on_select": False,
             "button": "形/PNGを選ぶ",
             "hint": "星・丸・四角などの内蔵形状か、これまでどおり任意の透過PNGを雨粒に使えます。未選択のときは標準のしずくを使います。",
             "filetypes": [("透過PNG", "*.png"), ("PNG", "*.png")],
@@ -571,7 +572,7 @@ class EffectFactoryApp(tk.Tk):
         ttk.Label(bar, text="FPS").pack(side="left", padx=(12, 4))
         ttk.OptionMenu(bar, self.live_preview_fps, self.live_preview_fps.get(), 10, 15, 20, 30, command=lambda *_: self._request_preview_rebuild(immediate=True)).pack(side="left")
         wrap = ttk.Frame(box)
-        wrap.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 8))
+        wrap.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         wrap.rowconfigure(0, weight=1)
         wrap.columnconfigure(0, weight=1)
         self.preview_label = tk.Label(wrap, bg="#05080b", fg="#dfe8ef", text="プレビュー準備中", font=("", 18, "bold"))
@@ -579,7 +580,6 @@ class EffectFactoryApp(tk.Tk):
         self.preview_overlay = tk.Label(wrap, bg="#163042", fg="#f6fbff", textvariable=self.preview_status, font=("", 11, "bold"), padx=12, pady=6)
         self.preview_overlay.place(relx=0.5, rely=0.05, anchor="n")
         self.preview_overlay.lower()
-        ttk.Label(box, textvariable=self.preview_info, foreground="#8fa0ad").grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
 
     def _build_settings_pane(self, parent):
         parent.rowconfigure(0, weight=1)
@@ -591,14 +591,8 @@ class EffectFactoryApp(tk.Tk):
         selected = ttk.LabelFrame(body, text="選択中")
         selected.pack(fill="x", pady=(0, 10))
         self.selected_title = ttk.Label(selected, text="-", font=("", 16, "bold"))
-        self.selected_title.pack(anchor="w", padx=10, pady=(10, 2))
+        self.selected_title.pack(anchor="w", padx=10, pady=(10, 10))
         self.selected_meta = ttk.Label(selected, text="", foreground="#8899a7")
-        self.selected_meta.pack(anchor="w", padx=10, pady=(0, 6))
-        copy_row = ttk.Frame(selected)
-        copy_row.pack(fill="x", padx=10, pady=(0, 4))
-        ttk.Label(copy_row, text="Codex用テキスト", foreground="#8899a7").pack(side="left")
-        ttk.Button(copy_row, text="コピー", command=self._copy_selection_summary).pack(side="right")
-        ttk.Entry(selected, textvariable=self.selection_summary, state="readonly").pack(fill="x", padx=10, pady=(0, 10))
 
         self.effect_asset_box = ttk.LabelFrame(body, text="素材")
         asset_row = ttk.Frame(self.effect_asset_box)
@@ -606,8 +600,7 @@ class EffectFactoryApp(tk.Tk):
         ttk.Label(asset_row, textvariable=self.effect_asset_title).pack(side="left")
         self.effect_asset_button = ttk.Button(asset_row, text="PNGを選ぶ", command=self._choose_current_effect_asset)
         self.effect_asset_button.pack(side="right")
-        ttk.Entry(self.effect_asset_box, textvariable=self.effect_asset_path_text, state="readonly").pack(fill="x", padx=10, pady=(0, 6))
-        ttk.Label(self.effect_asset_box, textvariable=self.effect_asset_hint, foreground="#8193a0", justify="left").pack(anchor="w", padx=10, pady=(0, 10))
+        ttk.Entry(self.effect_asset_box, textvariable=self.effect_asset_path_text, state="readonly").pack(fill="x", padx=10, pady=(0, 10))
 
         self.quick_box = ttk.LabelFrame(body, text="かんたん調整")
         self.quick_box.pack(fill="x", pady=(0, 10))
@@ -1383,7 +1376,8 @@ class EffectFactoryApp(tk.Tk):
             self._rebuild_param_ui()
             self._update_selection_labels()
             self._clear_timeline_markers(message="見た目変更に合わせてタイムラインを初期化しました", request_preview=False, schedule_history=False)
-            if self._effect_asset_spec(item["effect_id"]):
+            asset_spec = self._effect_asset_spec(item["effect_id"])
+            if asset_spec and asset_spec.get("auto_pick_on_select", True):
                 self._choose_effect_asset(item["effect_id"])
             self._request_preview_rebuild()
         self._refresh_gallery_selection()
@@ -1521,7 +1515,9 @@ class EffectFactoryApp(tk.Tk):
             ("size", "サイズ", "要素の大きさや太さです", ["width", "size_max", "size_min"]),
             ("length", "長さ", "光の棒の長さです", ["length"]),
             ("speed", "速度", "動きの速さです", ["speed", "sweep"]),
+            ("speed_randomness", "速度ランダム", "左で同じ速さ、右で粒ごとの速度差が増えます", ["speed_randomness"]),
             ("direction", "向き", "動きの向きを回転します", ["motion_direction"]),
+            ("grid_alignment", "ランダム/整列", "左がランダム、右が流れに沿った等間隔の隊列になります", ["grid_alignment"]),
             ("blur", "ぼかし", "柔らかい印象にします", ["blur", "blur_far", "blur_mid", "blur_near"]),
             ("brightness", "明るさ", "全体の光り方を調整します", ["brightness", "glow_strength", "glow", "strength"]),
             ("random", "ランダム感", "揺らぎやノイズの量です", ["twinkle", "flicker", "noise", "scanlines", "grain"]),
@@ -1535,7 +1531,7 @@ class EffectFactoryApp(tk.Tk):
             out.append({"id": cid, "label": label, "help": help_text, "keys": match})
             used.update(match)
         out.append({"id": "loop_length", "label": "ループ長", "help": "何秒で自然につながるかを決めます", "duration": True})
-        return out[:9]
+        return out[:10]
 
     def _build_quick_controls(self, plugin):
         specs = self._quick_specs(plugin)
@@ -1581,7 +1577,6 @@ class EffectFactoryApp(tk.Tk):
                 if p.get("type") == "choice":
                     ttk.OptionMenu(row, var, var.get(), *p.get("choices", [])).pack(side="left", fill="x", expand=True, padx=8)
                     ttk.Label(row, width=8, text=str(var.get())).pack(side="left")
-                    ttk.Label(self.quick_frame, text=spec["help"], foreground="#8193a0").pack(anchor="w", padx=(4, 0), pady=(0, 2))
                     continue
                 low = float(p.get("min", 0.0))
                 high = float(p.get("max", 10.0))
@@ -1604,7 +1599,6 @@ class EffectFactoryApp(tk.Tk):
                         lbl.configure(text=f"{float(self.param_vars[k].get()):.2f}")
                 var.trace_add("write", sync_scalar)
                 sync_scalar()
-            ttk.Label(self.quick_frame, text=spec["help"], foreground="#8193a0").pack(anchor="w", padx=(4, 0), pady=(0, 2))
 
     def _build_size_quick_control(self, row, spec):
         keys = [k for k in spec["keys"] if k in self.param_vars]
@@ -1657,7 +1651,7 @@ class EffectFactoryApp(tk.Tk):
             "glow_strength": "グロー強さ", "glow_radius": "グロー広がり", "mblur_samples": "モーションブラー",
             "layers": "奥行きレイヤ数", "blur_far": "遠景ぼけ", "blur_mid": "中景ぼけ", "blur_near": "近景ぼけ",
             "drift_x_cycles": "横移動", "drift_y_cycles": "縦移動", "size_min": "最小サイズ", "size_max": "最大サイズ",
-            "count": "数", "density": "密度", "palette": "色プリセット", "tint": "色味", "length": "長さ", "motion_direction": "動きの向き"
+            "count": "数", "density": "密度", "palette": "色プリセット", "tint": "色味", "length": "長さ", "motion_direction": "動きの向き", "speed_randomness": "速度ランダム", "grid_alignment": "ランダム/整列", "cohesion_dispersion": "発散/凝集", "cohesion": "凝集", "dispersion": "発散"
         }.get(p["key"], p.get("label", p["key"]))
 
     def _on_ui_value_changed(self):
@@ -1818,7 +1812,7 @@ class EffectFactoryApp(tk.Tk):
         groups = {
             "color": {"color", "tint", "palette", "tint_r", "tint_g", "tint_b", "nebula_r", "nebula_g", "nebula_b"},
             "shape": {"count", "density", "size_min", "size_max", "width", "length", "layers", "shooting_stars"},
-            "motion": {"speed", "sweep", "flicker", "twinkle", "drift_x_cycles", "drift_y_cycles", "tear_prob", "motion_direction"},
+            "motion": {"speed", "speed_randomness", "sweep", "flicker", "twinkle", "drift_x_cycles", "drift_y_cycles", "tear_prob", "motion_direction", "grid_alignment", "cohesion_dispersion", "cohesion", "dispersion"},
         }
         locked = set()
         if self.random_lock_color.get(): locked |= groups["color"]
