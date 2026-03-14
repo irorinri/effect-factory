@@ -1,4 +1,4 @@
-import os, json, time, queue, threading, subprocess, hashlib, importlib.util, zipfile
+import os, sys, json, time, queue, threading, subprocess, hashlib, importlib.util, zipfile
 from dataclasses import dataclass
 from datetime import datetime
 import tkinter as tk
@@ -23,6 +23,47 @@ def _open_folder(path: str):
         os.startfile(path)
     except Exception:
         pass
+
+
+def _relaunch_without_console_on_windows() -> bool:
+    if os.name != "nt":
+        return False
+    if os.environ.get("EFFECT_FACTORY_NO_CONSOLE") == "1":
+        return False
+    try:
+        import ctypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        hwnd = kernel32.GetConsoleWindow()
+        if not hwnd:
+            return False
+        proc_ids = (ctypes.c_ulong * 16)()
+        attached = int(kernel32.GetConsoleProcessList(proc_ids, len(proc_ids)))
+        if attached > 1:
+            return False
+        env = os.environ.copy()
+        env["EFFECT_FACTORY_NO_CONSOLE"] = "1"
+        create_no_window = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        detached_process = int(getattr(subprocess, "DETACHED_PROCESS", 0))
+        creationflags = create_no_window | detached_process
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, *sys.argv[1:]]
+        else:
+            pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+            exe = pythonw if os.path.exists(pythonw) else sys.executable
+            cmd = [exe, os.path.abspath(__file__), *sys.argv[1:]]
+        subprocess.Popen(
+            cmd,
+            cwd=os.getcwd(),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            creationflags=creationflags,
+        )
+        return True
+    except Exception:
+        return False
 
 
 def _hash_seed(*items) -> int:
@@ -2762,6 +2803,8 @@ class EffectFactoryApp(tk.Tk):
 
 
 if __name__ == "__main__":
+    if _relaunch_without_console_on_windows():
+        raise SystemExit(0)
     app = EffectFactoryApp()
     app.mainloop()
 
