@@ -1551,6 +1551,24 @@ class EffectFactoryApp(tk.Tk):
         self._on_ui_value_changed()
 
     def _quick_specs(self, plugin):
+        if plugin.id == "grid_lattice":
+            return [
+                {"id": "vertical_width", "label": "縦太さ", "help": "縦線群の太さを調整します。", "keys": ["vertical_width"]},
+                {"id": "vertical_width_randomness", "label": "縦太さランダム", "help": "縦線ごとの太さのばらつきを調整します。", "keys": ["vertical_width_randomness"]},
+                {"id": "horizontal_width", "label": "横太さ", "help": "横線群の太さを調整します。", "keys": ["horizontal_width"]},
+                {"id": "horizontal_width_randomness", "label": "横太さランダム", "help": "横線ごとの太さのばらつきを調整します。", "keys": ["horizontal_width_randomness"]},
+                {"id": "spacing", "label": "間隔", "help": "格子の粗密を調整します。", "keys": ["spacing"]},
+                {"id": "diagonal_count", "label": "斜め方向", "help": "交点どうしを斜めに結ぶ方向を 0 から 2 系統まで追加します。", "keys": ["diagonal_count"]},
+                {"id": "diagonal_span", "label": "斜め段数", "help": "交点を何マス飛ばしまで斜めに結ぶかを増やします。", "keys": ["diagonal_span"]},
+                {"id": "grid_rotation", "label": "全体向き", "help": "格子全体の向きを回転させます。", "keys": ["grid_rotation"]},
+                {"id": "vertical_angle", "label": "縦角度", "help": "縦線群だけの角度を調整します。", "keys": ["vertical_angle"]},
+                {"id": "horizontal_angle", "label": "横角度", "help": "横線群だけの角度を調整します。", "keys": ["horizontal_angle"]},
+                {"id": "vertical_speed", "label": "縦速度", "help": "縦線群の移動速度を調整します。", "keys": ["vertical_speed"]},
+                {"id": "horizontal_speed", "label": "横速度", "help": "横線群の移動速度を調整します。", "keys": ["horizontal_speed"]},
+                {"id": "line_fade", "label": "線の薄さ", "help": "線をどのくらい薄く見せるかを調整します。", "keys": ["line_fade"]},
+                {"id": "blur", "label": "ぼかし", "help": "線のにじみ具合を調整します。", "keys": ["blur"]},
+                {"id": "loop_length", "label": "ループ長", "help": "ループの長さを調整します。", "duration": True},
+            ]
         defs = [
             ("density", "密度", "粒や模様の数を増減します", ["density", "count", "strength", "intensity"]),
             ("size", "サイズ", "要素の大きさや太さです", ["width", "size_max", "size_min"]),
@@ -1575,6 +1593,28 @@ class EffectFactoryApp(tk.Tk):
         out.append({"id": "loop_length", "label": "ループ長", "help": "何秒で自然につながるかを決めます", "duration": True})
         limit = 11 if plugin.id == "png_rain" else 10
         return out[:limit]
+
+    def _quick_slider_snap_value(self, plugin, key: str, value: float, desc):
+        try:
+            value = float(value)
+        except Exception:
+            return value
+        if plugin is None or getattr(plugin, "id", "") != "grid_lattice" or desc.get("type") != "float":
+            return value
+        step = abs(float(desc.get("step", 0.1) or 0.1))
+        threshold = max(0.05, min(0.2, step * 1.2))
+        nearest = round(value)
+        if abs(value - nearest) <= threshold:
+            return float(nearest)
+        return value
+
+    def _format_quick_scalar_value(self, plugin, desc, value) -> str:
+        numeric = float(value)
+        if desc.get("type") == "int":
+            return str(int(round(numeric)))
+        if plugin is not None and getattr(plugin, "id", "") == "grid_lattice" and abs(numeric - round(numeric)) <= 1e-6:
+            return str(int(round(numeric)))
+        return f"{numeric:.2f}"
 
     def _build_quick_controls(self, plugin):
         specs = self._quick_specs(plugin)
@@ -1624,22 +1664,21 @@ class EffectFactoryApp(tk.Tk):
                 low = float(p.get("min", 0.0))
                 high = float(p.get("max", 10.0))
                 scale_var = tk.DoubleVar(value=float(var.get()))
-                def apply_scalar(_v=None, k=key, desc=p, sv=scale_var):
+                def apply_scalar(_v=None, k=key, desc=p, sv=scale_var, current_plugin=plugin):
+                    value = self._quick_slider_snap_value(current_plugin, k, sv.get(), desc)
                     if desc.get("type") == "int":
-                        self.param_vars[k].set(int(round(sv.get())))
+                        self.param_vars[k].set(int(round(value)))
                     else:
-                        self.param_vars[k].set(round(float(sv.get()), 3))
+                        self.param_vars[k].set(round(float(value), 3))
                 ttk.Scale(row, from_=low, to=high, variable=scale_var, command=apply_scalar).pack(side="left", fill="x", expand=True, padx=8)
                 value = ttk.Label(row, width=8)
                 value.pack(side="left")
-                def sync_scalar(*_a, k=key, desc=p, lbl=value, sv=scale_var):
+                def sync_scalar(*_a, k=key, desc=p, lbl=value, sv=scale_var, current_plugin=plugin):
                     if not lbl.winfo_exists():
                         return
-                    sv.set(float(self.param_vars[k].get()))
-                    if desc.get("type") == "int":
-                        lbl.configure(text=str(int(self.param_vars[k].get())))
-                    else:
-                        lbl.configure(text=f"{float(self.param_vars[k].get()):.2f}")
+                    current_value = float(self.param_vars[k].get())
+                    sv.set(current_value)
+                    lbl.configure(text=self._format_quick_scalar_value(current_plugin, desc, current_value))
                 var.trace_add("write", sync_scalar)
                 sync_scalar()
 
@@ -1853,9 +1892,9 @@ class EffectFactoryApp(tk.Tk):
         rng = np.random.default_rng(int(time.time() * 1000) & 0x7FFFFFFF)
         ratio = {"弱め": 0.18, "ふつう": 0.33, "強め": 0.52}.get(self.random_strength.get(), 0.33)
         groups = {
-            "color": {"color", "tint", "palette", "tint_r", "tint_g", "tint_b", "nebula_r", "nebula_g", "nebula_b"},
-            "shape": {"count", "density", "size_min", "size_max", "size_randomness", "width", "length", "layers", "shooting_stars"},
-            "motion": {"speed", "speed_randomness", "sweep", "flicker", "twinkle", "drift_x_cycles", "drift_y_cycles", "tear_prob", "motion_direction", "grid_alignment", "cohesion_dispersion", "cohesion", "dispersion"},
+            "color": {"color", "tint", "palette", "tint_r", "tint_g", "tint_b", "nebula_r", "nebula_g", "nebula_b", "line_fade"},
+            "shape": {"count", "density", "size_min", "size_max", "size_randomness", "width", "length", "layers", "shooting_stars", "vertical_width", "horizontal_width", "vertical_width_randomness", "horizontal_width_randomness", "spacing", "diagonal_count", "diagonal_span"},
+            "motion": {"speed", "speed_randomness", "sweep", "flicker", "twinkle", "drift_x_cycles", "drift_y_cycles", "tear_prob", "motion_direction", "grid_alignment", "cohesion_dispersion", "cohesion", "dispersion", "grid_rotation", "vertical_angle", "horizontal_angle", "vertical_speed", "horizontal_speed"},
         }
         locked = set()
         if self.random_lock_color.get(): locked |= groups["color"]
