@@ -64,8 +64,9 @@ def build_cache(w, h, frames, seed, params):
     loop = bool(params.get("__loop__", False))
     min_spacing = max(2.0, min_numeric(params, "spacing", 90.0))
     line_extent = 0.5 * float(np.hypot(w, h)) + 0.25 * float(max(w, h))
-    line_count = max(8, int(np.ceil((line_extent * 2.0) / min_spacing)) + 8)
-    indices = np.arange(line_count, dtype=np.float32) - (line_count - 1) * 0.5
+    line_radius = max(4, int(np.ceil(line_extent / min_spacing)) + 4)
+    indices = np.arange(-line_radius, line_radius + 1, dtype=np.float32)
+    line_count = int(indices.size)
     rng = np.random.default_rng(int(seed) & 0x7FFFFFFF)
 
     return {
@@ -77,6 +78,7 @@ def build_cache(w, h, frames, seed, params):
         "__frames__": int(params.get("__frames__", frames)),
         "seed": int(seed),
         "indices": indices,
+        "line_radius": int(line_radius),
         "line_count": int(line_count),
         "line_extent": float(line_extent),
         "half_span": float(np.hypot(w, h) + max(w, h)),
@@ -178,7 +180,7 @@ def render_frame(cache, i):
         diagonal_base_width = max(1.0, 0.72 * 0.5 * (vertical_width + horizontal_width))
         vertical_normal = _line_normal(vertical_angle)
         horizontal_normal = _line_normal(horizontal_angle)
-        line_radius = max(1, cache["line_count"] - 1)
+        line_radius = max(1, int(cache.get("line_radius", max(1, (cache["line_count"] - 1) // 2))))
 
         for p, q in _diagonal_pairs(diagonal_span):
             family_scale = max(float(p), float(q))

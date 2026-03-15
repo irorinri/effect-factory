@@ -397,6 +397,13 @@ class EffectFactoryApp(tk.Tk):
     TIMELINE_MARKERS = ("X", "Y", "Z")
     TIMELINE_HOLD_MARKERS = {"X": "xx", "Y": "yy", "Z": "zz"}
     TIMELINE_MARKER_COLORS = {"X": "#ff8a5b", "Y": "#5bc0eb", "Z": "#9bde6d"}
+    PREVIEW_ZOOM_MIN = 0.1
+    PREVIEW_ZOOM_MAX = 6.0
+    PREVIEW_ZOOM_STEP = 1.08
+    COMMON_PARAM_DESCS = (
+        {"key": "camera_zoom", "label": "ズーム", "type": "float", "default": 1.0, "min": PREVIEW_ZOOM_MIN, "max": PREVIEW_ZOOM_MAX, "step": 0.01, "randomize": False, "affects_seed": False},
+    )
+    COMMON_PARAM_KEYS = ("camera_zoom",)
     EFFECT_ASSET_SPECS = {
         "png_rain": {
             "runtime_key": "particle_sprite_path",
@@ -477,6 +484,7 @@ class EffectFactoryApp(tk.Tk):
         self.live_preview_scale = tk.DoubleVar(value=0.33)
         self.live_preview_seconds = tk.DoubleVar(value=4.0)
         self.preview_auto_refresh = tk.BooleanVar(value=True)
+        self.preview_zoom_text = tk.StringVar(value="Zoom 100%")
         self.show_log = tk.BooleanVar(value=False)
         self.preview_status = tk.StringVar(value="プレビュー待機中")
         self.preview_info = tk.StringVar(value="左で見た目を選び、右で少し調整します")
@@ -524,6 +532,7 @@ class EffectFactoryApp(tk.Tk):
         self._preview_settings = None
         self._preview_rebuild_after_id = None
         self._preview_photo = None
+        self._preview_source_image = None
 
         self._build_ui()
         self._apply_preset(self.presets.get(self.preset_name.get()))
@@ -621,6 +630,131 @@ class EffectFactoryApp(tk.Tk):
         self.preview_overlay = tk.Label(wrap, bg="#163042", fg="#f6fbff", textvariable=self.preview_status, font=("", 11, "bold"), padx=12, pady=6)
         self.preview_overlay.place(relx=0.5, rely=0.05, anchor="n")
         self.preview_overlay.lower()
+        self.preview_zoom_overlay = tk.Label(wrap, bg="#0b1117", fg="#dfe8ef", textvariable=self.preview_zoom_text, font=("", 10, "bold"), padx=8, pady=4)
+        self.preview_zoom_overlay.place(relx=0.98, rely=0.96, anchor="se")
+        for widget in (wrap, self.preview_label, self.preview_overlay, self.preview_zoom_overlay):
+            widget.bind("<MouseWheel>", self._on_preview_mousewheel)
+            widget.bind("<Button-4>", self._on_preview_mousewheel)
+            widget.bind("<Button-5>", self._on_preview_mousewheel)
+
+    def _params_for_plugin(self, plugin):
+        return [*plugin.params, *self.COMMON_PARAM_DESCS]
+
+    def _param_types_for_plugin(self, plugin):
+        return {p["key"]: p.get("type", "float") for p in self._params_for_plugin(plugin)}
+
+    def _seed_params_for_plugin(self, plugin, params: dict):
+        out = {}
+        source = params if isinstance(params, dict) else {}
+        for p in self._params_for_plugin(plugin):
+            key = p["key"]
+            if not p.get("affects_seed", True):
+                continue
+            if key in source:
+                out[key] = source[key]
+        return out
+
+    def _zoom_param_value(self, params: dict = None) -> float:
+        source = params if isinstance(params, dict) else ({key: var.get() for key, var in self.param_vars.items()} if self.param_vars else {})
+        try:
+            value = float(source.get("camera_zoom", self.COMMON_PARAM_DESCS[0]["default"]))
+        except Exception:
+            value = float(self.COMMON_PARAM_DESCS[0]["default"])
+        return min(self.PREVIEW_ZOOM_MAX, max(self.PREVIEW_ZOOM_MIN, value))
+
+    def _sync_preview_zoom_text(self, value: float = None):
+        if value is None:
+            value = self._zoom_param_value()
+        self.preview_zoom_text.set(f"Zoom {int(round(float(value) * 100.0))}%")
+
+    def _set_zoom_param_value(self, zoom: float, immediate: bool = False):
+        if "camera_zoom" not in self.param_vars:
+            self._sync_preview_zoom_text(zoom)
+            return False
+        zoom = min(self.PREVIEW_ZOOM_MAX, max(self.PREVIEW_ZOOM_MIN, float(zoom)))
+        current = self._zoom_param_value()
+        if abs(zoom - current) <= 1e-4:
+            return False
+        self._set_param_var_value("camera_zoom", round(zoom, 3))
+        self._refresh_preview_display()
+        if immediate and self.preview_auto_refresh.get() and self._preview_source_image is None:
+            self._request_preview_rebuild(immediate=True)
+        return True
+
+    def _on_preview_mousewheel(self, evt):
+        delta = 0.0
+        try:
+            delta = float(getattr(evt, "delta", 0.0))
+        except Exception:
+            delta = 0.0
+        zoom_in = False
+        steps = 1.0
+        if abs(delta) > 1e-9:
+            zoom_in = delta < 0.0
+            steps = max(1.0, abs(delta) / 120.0)
+        else:
+            num = int(getattr(evt, "num", 0) or 0)
+            if num == 5:
+                zoom_in = True
+            elif num == 4:
+                zoom_in = False
+            else:
+                return "break"
+        factor = self.PREVIEW_ZOOM_STEP ** steps
+        current = self._zoom_param_value()
+        target = current * factor if zoom_in else current / factor
+        self._set_zoom_param_value(target, immediate=True)
+        return "break"
+
+    def _apply_camera_zoom(self, img: Image.Image, zoom: float) -> Image.Image:
+        if img is None:
+            return None
+        zoom = min(self.PREVIEW_ZOOM_MAX, max(self.PREVIEW_ZOOM_MIN, float(zoom)))
+        if abs(zoom - 1.0) <= 1e-4:
+            return img
+        w, h = img.size
+        if w <= 0 or h <= 0:
+            return img
+        resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+        scaled_w = max(1, int(round(w * zoom)))
+        scaled_h = max(1, int(round(h * zoom)))
+        scaled = img.resize((scaled_w, scaled_h), resample=resample)
+        if zoom >= 1.0:
+            left = max(0, (scaled_w - w) // 2)
+            top = max(0, (scaled_h - h) // 2)
+            return scaled.crop((left, top, left + w, top + h))
+        canvas = Image.new(img.mode, (w, h))
+        center_left = (w - scaled_w) // 2
+        center_top = (h - scaled_h) // 2
+        use_mask = "A" in scaled.getbands()
+        min_tx = int(np.floor((-center_left) / float(max(1, scaled_w)))) - 1
+        max_tx = int(np.ceil((w - center_left) / float(max(1, scaled_w)))) + 1
+        min_ty = int(np.floor((-center_top) / float(max(1, scaled_h)))) - 1
+        max_ty = int(np.ceil((h - center_top) / float(max(1, scaled_h)))) + 1
+        # Tile the rendered frame in a consistent orientation so zoom-out shows
+        # a wider repeating field without mirrored kaleidoscope motion.
+        for ty in range(min_ty, max_ty + 1):
+            top = center_top + ty * scaled_h
+            if top >= h or top + scaled_h <= 0:
+                continue
+            for tx in range(min_tx, max_tx + 1):
+                left = center_left + tx * scaled_w
+                if left >= w or left + scaled_w <= 0:
+                    continue
+                if use_mask:
+                    canvas.paste(scaled, (left, top), scaled)
+                else:
+                    canvas.paste(scaled, (left, top))
+        return canvas
+
+    def _refresh_preview_display(self):
+        if self._preview_source_image is None:
+            return
+        img = self._apply_camera_zoom(self._preview_source_image, self._zoom_param_value())
+        if img is None:
+            return
+        self._preview_photo = ImageTk.PhotoImage(img)
+        self.preview_label.configure(image=self._preview_photo, text="")
 
     def _build_settings_pane(self, parent):
         parent.rowconfigure(0, weight=1)
@@ -1377,21 +1511,22 @@ class EffectFactoryApp(tk.Tk):
         preset = self.presets.get(item["id"]) if item["kind"] == "preset" else None
         plugin = self.plugins[item["effect_id"]]
         w, h, frames = 320, 180, 20
-        params = {p["key"]: p.get("default") for p in plugin.params}
+        params = {p["key"]: p.get("default") for p in self._params_for_plugin(plugin)}
         params.update(self._effect_runtime_extras(plugin.id))
         seed = 12345
         if preset:
             rng = np.random.default_rng(_hash_seed(preset.get("random", {}).get("base_seed", 12345), preset["name"], plugin.id, "thumb"))
-            for p in plugin.params:
+            for p in self._params_for_plugin(plugin):
                 key = p["key"]
                 spec = (preset.get("params", {}) or {}).get(key)
                 params[key] = resolve_value(rng, spec, params[key], pdesc=p)
-            seed = _hash_seed(seed, preset["name"], plugin.id, json.dumps(params, sort_keys=True))
+            seed = _hash_seed(seed, preset["name"], plugin.id, json.dumps(self._seed_params_for_plugin(plugin, params), sort_keys=True))
         params["__loop__"] = True
         params["__frames__"] = frames
         params["__fps__"] = 12
         cache = plugin.build_cache(w=w, h=h, frames=frames, seed=seed, params=params)
         img = plugin.render_frame(cache, frames // 3)
+        img = self._apply_camera_zoom(img, params.get("camera_zoom", 1.0))
         return ImageOps.fit(img, self.THUMB_SIZE, method=Image.Resampling.LANCZOS)
 
     def _apply_thumb_widget(self, item, img):
@@ -1452,7 +1587,7 @@ class EffectFactoryApp(tk.Tk):
             f"effect_name={plugin.name}",
             f"category={category}",
             f"usage={usage}",
-            "params=" + ", ".join(p["key"] for p in plugin.params),
+            "params=" + ", ".join(p["key"] for p in self._params_for_plugin(plugin)),
         ]
         if asset_path:
             summary_parts.append(f"particle_asset={self._effect_asset_display_name(plugin.id, asset_path)}")
@@ -1532,15 +1667,21 @@ class EffectFactoryApp(tk.Tk):
         existing = {k: v.get() for k, v in self.param_vars.items()}
         self.param_vars.clear()
         self.param_desc.clear()
-        for p in plugin.params:
+        for p in self._params_for_plugin(plugin):
             self.param_desc[p["key"]] = p
             var = self._new_var(p, existing.get(p["key"], p.get("default", 0)))
             self.param_vars[p["key"]] = var
             var.trace_add("write", lambda *_a, key=p["key"]: self._on_param_var_changed(key))
         self._build_quick_controls(plugin)
+        self._sync_preview_zoom_text()
         self._update_selection_labels()
 
     def _on_param_var_changed(self, key):
+        request_preview = True
+        if key == "camera_zoom":
+            self._sync_preview_zoom_text()
+            self._refresh_preview_display()
+            request_preview = self._preview_source_image is None
         if not self._ui_restoring:
             self.param_overrides.add(key)
             if self.timeline_selected_marker and self.timeline_selected_marker in self.timeline_markers:
@@ -1548,11 +1689,13 @@ class EffectFactoryApp(tk.Tk):
             elif self.timeline_markers:
                 self.timeline_status.set("未保存の調整です。必要なら X / Y / Z で現在位置へ記憶してください")
                 self._refresh_timeline_ui()
-        self._on_ui_value_changed()
+        self._on_ui_value_changed(request_preview=request_preview if key == "camera_zoom" else True)
 
     def _quick_specs(self, plugin):
+        zoom_help = "ライブプレビューと書き出し全体の寄り引きです。プレビュー上のホイールでも動かせます。"
         if plugin.id == "grid_lattice":
             return [
+                {"id": "zoom", "label": "ズーム", "help": zoom_help, "keys": ["camera_zoom"]},
                 {"id": "vertical_width", "label": "縦太さ", "help": "縦線群の太さを調整します。", "keys": ["vertical_width"]},
                 {"id": "vertical_width_randomness", "label": "縦太さランダム", "help": "縦線ごとの太さのばらつきを調整します。", "keys": ["vertical_width_randomness"]},
                 {"id": "horizontal_width", "label": "横太さ", "help": "横線群の太さを調整します。", "keys": ["horizontal_width"]},
@@ -1570,6 +1713,7 @@ class EffectFactoryApp(tk.Tk):
                 {"id": "loop_length", "label": "ループ長", "help": "ループの長さを調整します。", "duration": True},
             ]
         defs = [
+            ("zoom", "ズーム", zoom_help, ["camera_zoom"]),
             ("density", "密度", "粒や模様の数を増減します", ["density", "count", "strength", "intensity"]),
             ("size", "サイズ", "要素の大きさや太さです", ["width", "size_max", "size_min"]),
             ("size_randomness", "サイズランダム", "左で均一、右で粒ごとのサイズ差が増えます", ["size_randomness"]),
@@ -1591,7 +1735,7 @@ class EffectFactoryApp(tk.Tk):
             out.append({"id": cid, "label": label, "help": help_text, "keys": match})
             used.update(match)
         out.append({"id": "loop_length", "label": "ループ長", "help": "何秒で自然につながるかを決めます", "duration": True})
-        limit = 11 if plugin.id == "png_rain" else 10
+        limit = 12 if plugin.id == "png_rain" else 11
         return out[:limit]
 
     def _quick_slider_snap_value(self, plugin, key: str, value: float, desc):
@@ -1729,20 +1873,20 @@ class EffectFactoryApp(tk.Tk):
 
     def _pretty_label(self, p):
         return {
-            "brightness": "明るさ", "speed": "速度", "grain": "グレイン", "glow": "グロー",
+            "camera_zoom": "ズーム", "brightness": "明るさ", "speed": "速度", "grain": "グレイン", "glow": "グロー",
             "glow_strength": "グロー強さ", "glow_radius": "グロー広がり", "mblur_samples": "モーションブラー",
             "layers": "奥行きレイヤ数", "blur_far": "遠景ぼけ", "blur_mid": "中景ぼけ", "blur_near": "近景ぼけ",
             "drift_x_cycles": "横移動", "drift_y_cycles": "縦移動", "size_min": "最小サイズ", "size_max": "最大サイズ", "size_randomness": "サイズランダム",
             "count": "数", "density": "密度", "palette": "色プリセット", "tint": "色味", "length": "尾引き", "motion_direction": "動きの向き", "speed_randomness": "速度ランダム", "grid_alignment": "ランダム/整列", "cohesion_dispersion": "発散/凝集", "cohesion": "凝集", "dispersion": "発散"
         }.get(p["key"], p.get("label", p["key"]))
 
-    def _on_ui_value_changed(self):
+    def _on_ui_value_changed(self, request_preview: bool = True):
         if self._ui_restoring:
             return
         self._refresh_timeline_ui()
         self._sync_preview_runtime_from_ui()
         self._schedule_history("edit")
-        if self.preview_auto_refresh.get():
+        if request_preview and self.preview_auto_refresh.get():
             self._request_preview_rebuild()
 
     def _snapshot_state(self):
@@ -2214,7 +2358,7 @@ class EffectFactoryApp(tk.Tk):
         ranges = (preset or {}).get("params", {})
         overrides = set(param_overrides)
         out = {}
-        for p in plugin.params:
+        for p in self._params_for_plugin(plugin):
             key = p["key"]
             spec = None if key in overrides else ranges.get(key)
             out[key] = resolve_value(rng, spec, fixed_params.get(key, p.get("default")), pdesc=p)
@@ -2235,7 +2379,8 @@ class EffectFactoryApp(tk.Tk):
         params_seed = _hash_seed(base_seed, int(variant), preset_name, eff_id, "params")
         rng = np.random.default_rng(params_seed)
         resolved_params = self._resolve_params_for_state(plugin, preset, fixed, overrides, rng)
-        param_blob = json.dumps(resolved_params, sort_keys=True, ensure_ascii=True)
+        seed_params = self._seed_params_for_plugin(plugin, resolved_params)
+        param_blob = json.dumps(seed_params, sort_keys=True, ensure_ascii=True)
         final_seed = _hash_seed(base_seed, int(variant), preset_name, eff_id, out_w, out_h, out_fps, out_frames, param_blob)
         runtime = dict(resolved_params)
         runtime.update(self._effect_runtime_extras(eff_id))
@@ -2269,21 +2414,21 @@ class EffectFactoryApp(tk.Tk):
             ))
         return out
 
-    def _animation_seed(self, current_state, timeline_states):
+    def _animation_seed(self, plugin, current_state, timeline_states):
         if not timeline_states:
             return int(current_state["final_seed"])
         marker_blob = json.dumps([
             {
                 "label": state.get("label"),
                 "time_sec": float(state.get("time_sec", 0.0)),
-                "params": state["resolved_params"],
+                "params": self._seed_params_for_plugin(plugin, state["resolved_params"]),
             }
             for state in timeline_states
         ], sort_keys=True, ensure_ascii=True)
         return _hash_seed(current_state["base_seed"], current_state["variant"], "timeline", marker_blob)
 
     def _build_render_context(self, plugin, w: int, h: int, frames: int, current_state, timeline_states):
-        param_types = {p["key"]: p.get("type", "float") for p in plugin.params}
+        param_types = self._param_types_for_plugin(plugin)
         runtime = dict(current_state["runtime"])
         if timeline_states:
             runtime["__timeline__"] = {
@@ -2301,7 +2446,7 @@ class EffectFactoryApp(tk.Tk):
             w=w,
             h=h,
             frames=frames,
-            seed=self._animation_seed(current_state, timeline_states),
+            seed=self._animation_seed(plugin, current_state, timeline_states),
             params=runtime,
         )
         if isinstance(cache, dict) and "__timeline__" in runtime:
@@ -2333,7 +2478,7 @@ class EffectFactoryApp(tk.Tk):
         if not timeline_states:
             return runtime
         states = list(timeline_states)
-        param_types = {p["key"]: p.get("type", "float") for p in plugin.params}
+        param_types = self._param_types_for_plugin(plugin)
         if time_sec <= float(states[0].get("time_sec", 0.0)):
             runtime.update(states[0]["resolved_params"])
         elif time_sec >= float(states[-1].get("time_sec", 0.0)):
@@ -2352,7 +2497,7 @@ class EffectFactoryApp(tk.Tk):
                     mix = 0.0 if time_sec <= left_time else _clamp01((time_sec - left_time) / span)
                     break
             base_params = current_state["resolved_params"]
-            for p in plugin.params:
+            for p in self._params_for_plugin(plugin):
                 key = p["key"]
                 default = base_params.get(key, p.get("default"))
                 if key == "motion_direction":
@@ -2367,17 +2512,21 @@ class EffectFactoryApp(tk.Tk):
         runtime["__fps__"] = int(current_state["runtime"].get("__fps__", 30))
         return runtime
 
-    def _render_frame_at_time(self, plugin, render_context, frame_i: int, time_sec: float):
+    def _render_frame_at_time(self, plugin, render_context, frame_i: int, time_sec: float, apply_camera_zoom: bool = True):
         if not render_context:
             raise ValueError("render context is empty")
         cache = render_context["cache"]
-        cache["__runtime_params__"] = self._runtime_params_for_time(
+        runtime = self._runtime_params_for_time(
             plugin,
             render_context["current_state"],
             render_context.get("timeline_states", []),
             time_sec,
         )
-        return plugin.render_frame(cache, max(0, int(frame_i)))
+        cache["__runtime_params__"] = runtime
+        img = plugin.render_frame(cache, max(0, int(frame_i)))
+        if apply_camera_zoom:
+            return self._apply_camera_zoom(img, runtime.get("camera_zoom", 1.0))
+        return img
 
     def _timeline_meta(self, current_state, timeline_states):
         return {
@@ -2651,7 +2800,7 @@ class EffectFactoryApp(tk.Tk):
                     time.sleep(0.03)
                     last = time.perf_counter()
                     continue
-                img = self._render_frame_at_time(plugin, render_context, frame_i, sample_time_sec)
+                img = self._render_frame_at_time(plugin, render_context, frame_i, sample_time_sec, apply_camera_zoom=False)
                 last_frame_key = frame_key
                 try:
                     while True:
@@ -2690,8 +2839,8 @@ class EffectFactoryApp(tk.Tk):
             except queue.Empty:
                 pass
             if img is not None:
-                self._preview_photo = ImageTk.PhotoImage(img)
-                self.preview_label.configure(image=self._preview_photo, text="")
+                self._preview_source_image = img
+                self._refresh_preview_display()
         finally:
             if not self._preview_stop_evt.is_set():
                 self.after(33, self._preview_ui_tick)
