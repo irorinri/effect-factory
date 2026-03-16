@@ -489,6 +489,7 @@ class EffectFactoryApp(tk.Tk):
         self.preview_status = tk.StringVar(value="プレビュー待機中")
         self.preview_info = tk.StringVar(value="左で見た目を選び、右で少し調整します")
         self.selection_summary = tk.StringVar(value="")
+        self.selected_effect_name = tk.StringVar(value="")
         self.effect_asset_title = tk.StringVar(value="")
         self.effect_asset_path_text = tk.StringVar(value="")
         self.effect_asset_hint = tk.StringVar(value="")
@@ -584,22 +585,13 @@ class EffectFactoryApp(tk.Tk):
         self._log("v2: 生成ロジックを維持したまま初心者向け UI を追加しました。")
 
     def _build_gallery_pane(self, parent):
-        parent.rowconfigure(1, weight=1)
+        parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
-        head = ttk.LabelFrame(parent, text="見た目を選ぶ")
-        head.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        ttk.Label(head, text="サムネイルから選ぶと、プリセットとエフェクトが切り替わります。", justify="left").pack(anchor="w", padx=10, pady=(10, 4))
-        tools = ttk.Frame(head)
-        tools.pack(fill="x", padx=10, pady=(0, 10))
-        ttk.Entry(tools, textvariable=self.gallery_search).pack(side="left", fill="x", expand=True)
-        ttk.Combobox(tools, textvariable=self.gallery_filter, state="readonly", values=["すべて", "Particles", "Glow", "Lines", "Noise", "Abstract", "Overlay向け", "背景向け"], width=12).pack(side="left", padx=(8, 0))
         self.gallery_scroll = ScrollableFrame(parent)
-        self.gallery_scroll.grid(row=1, column=0, sticky="nsew")
+        self.gallery_scroll.grid(row=0, column=0, sticky="nsew")
         self.gallery_grid = tk.Frame(self.gallery_scroll.interior, bg="#121820", bd=0, highlightthickness=0)
         self.gallery_grid.pack(fill="both", expand=True, padx=6, pady=(0, 6))
         self.gallery_scroll.canvas.bind("<Configure>", self._on_gallery_canvas_resize, add="+")
-        self.gallery_search.trace_add("write", lambda *_: self._rebuild_gallery())
-        self.gallery_filter.trace_add("write", lambda *_: self._rebuild_gallery())
 
     def _build_preview_pane(self, parent):
         parent.rowconfigure(1, weight=1)
@@ -763,11 +755,13 @@ class EffectFactoryApp(tk.Tk):
         scroll.grid(row=0, column=0, sticky="nsew")
         body = scroll.interior
 
-        selected = ttk.LabelFrame(body, text="選択中")
-        selected.pack(fill="x", pady=(0, 10))
-        self.selected_title = ttk.Label(selected, text="-", font=("", 16, "bold"))
-        self.selected_title.pack(anchor="w", padx=10, pady=(10, 10))
-        self.selected_meta = ttk.Label(selected, text="", foreground="#8899a7")
+        selected_box = ttk.LabelFrame(body, text="選択中エフェクト")
+        selected_box.pack(fill="x", pady=(0, 10))
+        selected_row = ttk.Frame(selected_box)
+        selected_row.pack(fill="x", padx=10, pady=10)
+        ttk.Label(selected_row, text="名前").pack(side="left")
+        ttk.Entry(selected_row, textvariable=self.selected_effect_name, state="readonly").pack(side="left", fill="x", expand=True, padx=(8, 8))
+        ttk.Button(selected_row, text="コピー", command=self._copy_selected_effect_name).pack(side="left")
 
         self.effect_asset_box = ttk.LabelFrame(body, text="素材")
         asset_row = ttk.Frame(self.effect_asset_box)
@@ -1574,13 +1568,8 @@ class EffectFactoryApp(tk.Tk):
         plugin = self.plugins[self.effect_id.get()]
         category = _effect_category(plugin.id, plugin.name)
         usage = _effect_usage(plugin.id, plugin.name)
-        selected_name = preset.get("name") if preset else plugin.name
         asset_path = self._effect_asset_path(plugin.id)
-        meta_text = f"{category} / {usage} / effect: {plugin.name}"
-        if asset_path:
-            meta_text += f" / 画像: {self._effect_asset_display_name(plugin.id, asset_path)}"
-        self.selected_title.configure(text=selected_name)
-        self.selected_meta.configure(text=meta_text)
+        self.selected_effect_name.set(plugin.name)
         summary_parts = [
             f"preset={preset.get('name') if preset else '(none)'}",
             f"effect_id={plugin.id}",
@@ -1605,6 +1594,16 @@ class EffectFactoryApp(tk.Tk):
                 return
             self.clipboard_clear(); self.clipboard_append(text)
             self._log("[INFO] copied selection summary")
+        except Exception as e:
+            self.msgq.put(("err", str(e)))
+
+    def _copy_selected_effect_name(self):
+        try:
+            text = self.selected_effect_name.get().strip()
+            if not text:
+                return
+            self.clipboard_clear(); self.clipboard_append(text)
+            self._log(f"[INFO] copied effect_name={text}")
         except Exception as e:
             self.msgq.put(("err", str(e)))
 
@@ -1693,6 +1692,35 @@ class EffectFactoryApp(tk.Tk):
 
     def _quick_specs(self, plugin):
         zoom_help = "ライブプレビューと書き出し全体の寄り引きです。プレビュー上のホイールでも動かせます。"
+        if plugin.id == "focus_lines":
+            return [
+                {"id": "zoom", "label": "ズーム", "help": zoom_help, "keys": ["camera_zoom"]},
+                {"id": "count", "label": "本数", "help": "集中線の本数です。", "keys": ["count"]},
+                {"id": "hole_radius", "label": "中心の抜き", "help": "中心の空白の大きさです。", "keys": ["hole_radius"]},
+                {"id": "length", "label": "長さ", "help": "線の伸びる長さです。", "keys": ["length"]},
+                {"id": "width", "label": "太さ", "help": "線の外側の太さです。", "keys": ["width"]},
+                {"id": "taper", "label": "先細り", "help": "中心側をどれだけ細くするかです。", "keys": ["taper"]},
+                {"id": "size_randomness", "label": "サイズ揺らぎ", "help": "線ごとの長さや太さのばらつきです。", "keys": ["size_randomness"]},
+                {"id": "angle_randomness", "label": "角度揺らぎ", "help": "線の並び方のランダムさです。", "keys": ["angle_randomness"]},
+                {"id": "arc", "label": "広がり角度", "help": "集中線を出す角度範囲です。", "keys": ["arc"]},
+                {"id": "arc_rotation", "label": "向き", "help": "集中線の向きです。", "keys": ["arc_rotation"]},
+                {"id": "spiral", "label": "カーブ", "help": "線を少し曲げてひねりを加えます。", "keys": ["spiral"]},
+                {"id": "center_x", "label": "中心X", "help": "集中点の横位置です。", "keys": ["center_x"]},
+                {"id": "center_y", "label": "中心Y", "help": "集中点の縦位置です。", "keys": ["center_y"]},
+                {"id": "wobble", "label": "中心揺れ", "help": "集中点を小さく動かします。", "keys": ["wobble"]},
+                {"id": "rotation_speed", "label": "回転速度", "help": "集中線全体を回転させます。", "keys": ["rotation_speed"]},
+                {"id": "pulse", "label": "伸縮", "help": "線の長さや勢いを脈打たせます。", "keys": ["pulse"]},
+                {"id": "flicker", "label": "明滅", "help": "線ごとの明るさの揺れです。", "keys": ["flicker"]},
+                {"id": "speed", "label": "速度", "help": "アニメーション全体の速さです。", "keys": ["speed"]},
+                {"id": "blur", "label": "ぼかし", "help": "線の縁を柔らかくします。", "keys": ["blur"]},
+                {"id": "glow", "label": "グロー", "help": "明るい線に発光を足します。", "keys": ["glow"]},
+                {"id": "brightness", "label": "明るさ", "help": "全体の明るさです。", "keys": ["brightness"]},
+                {"id": "tint_r", "label": "赤", "help": "赤成分の強さです。", "keys": ["tint_r"]},
+                {"id": "tint_g", "label": "緑", "help": "緑成分の強さです。", "keys": ["tint_g"]},
+                {"id": "tint_b", "label": "青", "help": "青成分の強さです。", "keys": ["tint_b"]},
+                {"id": "grain", "label": "グレイン", "help": "ざらつきの量です。", "keys": ["grain"]},
+                {"id": "loop_length", "label": "ループ長", "help": "アニメーションの長さです。", "duration": True},
+            ]
         if plugin.id == "grid_lattice":
             return [
                 {"id": "zoom", "label": "ズーム", "help": zoom_help, "keys": ["camera_zoom"]},
@@ -2036,9 +2064,9 @@ class EffectFactoryApp(tk.Tk):
         rng = np.random.default_rng(int(time.time() * 1000) & 0x7FFFFFFF)
         ratio = {"弱め": 0.18, "ふつう": 0.33, "強め": 0.52}.get(self.random_strength.get(), 0.33)
         groups = {
-            "color": {"color", "tint", "palette", "tint_r", "tint_g", "tint_b", "nebula_r", "nebula_g", "nebula_b", "line_fade"},
-            "shape": {"count", "density", "size_min", "size_max", "size_randomness", "width", "length", "layers", "shooting_stars", "vertical_width", "horizontal_width", "vertical_width_randomness", "horizontal_width_randomness", "spacing", "diagonal_count", "diagonal_span"},
-            "motion": {"speed", "speed_randomness", "sweep", "flicker", "twinkle", "drift_x_cycles", "drift_y_cycles", "tear_prob", "motion_direction", "grid_alignment", "cohesion_dispersion", "cohesion", "dispersion", "grid_rotation", "vertical_angle", "horizontal_angle", "vertical_speed", "horizontal_speed"},
+            "color": {"color", "tint", "palette", "tint_r", "tint_g", "tint_b", "nebula_r", "nebula_g", "nebula_b", "line_fade", "glow", "brightness", "grain"},
+            "shape": {"count", "density", "size_min", "size_max", "size_randomness", "width", "length", "layers", "shooting_stars", "vertical_width", "horizontal_width", "vertical_width_randomness", "horizontal_width_randomness", "spacing", "diagonal_count", "diagonal_span", "hole_radius", "taper", "angle_randomness", "arc", "spiral", "center_x", "center_y"},
+            "motion": {"speed", "speed_randomness", "sweep", "flicker", "twinkle", "drift_x_cycles", "drift_y_cycles", "tear_prob", "motion_direction", "grid_alignment", "cohesion_dispersion", "cohesion", "dispersion", "grid_rotation", "vertical_angle", "horizontal_angle", "vertical_speed", "horizontal_speed", "wobble", "rotation_speed", "pulse", "arc_rotation", "blur"},
         }
         locked = set()
         if self.random_lock_color.get(): locked |= groups["color"]
@@ -2995,7 +3023,6 @@ if __name__ == "__main__":
         raise SystemExit(0)
     app = EffectFactoryApp()
     app.mainloop()
-
 
 
 

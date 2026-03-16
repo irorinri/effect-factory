@@ -243,8 +243,11 @@ def build_cache(w, h, frames, seed, params):
         formation_stagger = 0.5 if (slot_col % 2) else 0.0
         ordered_perpendicular = -0.5 * perpendicular_span + (slot_col + 0.5) * lane_spacing
         ordered_parallel = -0.6 * parallel_span + (slot_row + 0.5 + formation_stagger) * row_spacing
+        aligned_parallel = -0.6 * parallel_span + (slot_row + 0.5) * row_spacing
         ordered_x = center_x + ref_normal_x * ordered_perpendicular + ref_flow_x * ordered_parallel
         ordered_y = center_y + ref_normal_y * ordered_perpendicular + ref_flow_y * ordered_parallel
+        aligned_ordered_x = center_x + ref_normal_x * ordered_perpendicular + ref_flow_x * aligned_parallel
+        aligned_ordered_y = center_y + ref_normal_y * ordered_perpendicular + ref_flow_y * aligned_parallel
         offset_perpendicular = float(rng.uniform(-0.18, 0.18)) * lane_spacing
         offset_parallel = float(rng.uniform(-0.28, 0.28)) * row_spacing
         random_x = ordered_x + ref_normal_x * offset_perpendicular + ref_flow_x * offset_parallel
@@ -256,6 +259,9 @@ def build_cache(w, h, frames, seed, params):
                 "y0": float(random_y),
                 "ordered_x": float(ordered_x),
                 "ordered_y": float(ordered_y),
+                "aligned_ordered_x": float(aligned_ordered_x),
+                "aligned_ordered_y": float(aligned_ordered_y),
+                "ordered_index": int(slot_index),
                 "depth": depth,
                 "size_mix": float(rng.uniform(0.0, 1.0)),
                 "speed_px": float(rng.uniform(ordered_speed_px * 0.25, ordered_speed_px * 1.75)),
@@ -350,7 +356,10 @@ def render_frame(cache, i):
     alignment_random_mix = (1.0 - grid_alignment) ** 2
 
     for particle in cache["particles"]:
-        vis = _visible_fraction(visible_target, particle["index"])
+        visibility_index = float(particle["ordered_index"]) + (
+            float(particle["index"]) - float(particle["ordered_index"])
+        ) * alignment_random_mix
+        vis = _visible_fraction(visible_target, visibility_index)
         if vis <= 0.0:
             continue
         delta_speed_px = particle["speed_px"] - cache["ordered_speed_px"]
@@ -361,7 +370,7 @@ def render_frame(cache, i):
                 delta_speed_px,
                 default_motion_direction=defaults["motion_direction"],
                 default_speed=defaults["speed"],
-                default_mix=defaults["speed_randomness"],
+                default_mix=defaults["speed_randomness"] * alignment_random_mix,
             )
             motion_dx = common_dx + random_speed_dx
             motion_dy = common_dy + random_speed_dy
@@ -373,6 +382,10 @@ def render_frame(cache, i):
         random_y = particle["y0"] + motion_dy + random_sway_dy
         ordered_x = particle["ordered_x"] + motion_dx
         ordered_y = particle["ordered_y"] + motion_dy
+        aligned_ordered_x = particle["aligned_ordered_x"] + common_dx
+        aligned_ordered_y = particle["aligned_ordered_y"] + common_dy
+        ordered_x = ordered_x + (aligned_ordered_x - ordered_x) * grid_alignment
+        ordered_y = ordered_y + (aligned_ordered_y - ordered_y) * grid_alignment
         nearest_ordered_x = _closest_tiled_coordinate(ordered_x, random_x, travel_w)
         nearest_ordered_y = _closest_tiled_coordinate(ordered_y, random_y, travel_h)
         x = random_x + (nearest_ordered_x - random_x) * grid_alignment
