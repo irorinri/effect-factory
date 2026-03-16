@@ -5,6 +5,8 @@ import os, sys
 sys.path.append(os.path.dirname(__file__))
 from _fxutil import frame_params, min_numeric
 
+GRID_SUPERSAMPLE = 2
+
 
 def _wrapped_shift(spacing: float, speed: float, phase_sec: float) -> float:
     if spacing <= 1e-6 or abs(speed) <= 1e-9:
@@ -44,19 +46,22 @@ def _diagonal_pairs(span: int):
     return pairs
 
 
-def _draw_line_family(draw, cx: float, cy: float, offsets: np.ndarray, widths: np.ndarray, angle_rad: float, half_span: float):
+def _draw_line_family(draw, cx: float, cy: float, offsets: np.ndarray, widths: np.ndarray, angle_rad: float, half_span: float, coord_scale: float = 1.0):
     dx = float(np.cos(angle_rad) * half_span)
     dy = float(np.sin(angle_rad) * half_span)
     nx = float(-np.sin(angle_rad))
     ny = float(np.cos(angle_rad))
 
     for offset, width in zip(offsets.tolist(), widths.tolist()):
-        px = cx + nx * float(offset)
-        py = cy + ny * float(offset)
+        # Snap the moving line centers to the pixel grid so playback does not
+        # create thickness wobble from subpixel rasterization.
+        snapped_offset = float(np.round(float(offset)))
+        px = cx + nx * snapped_offset * coord_scale
+        py = cy + ny * snapped_offset * coord_scale
         draw.line(
             (px - dx, py - dy, px + dx, py + dy),
             fill=255,
-            width=max(1, int(round(width))),
+            width=max(1, int(round(width * coord_scale))),
         )
 
 
@@ -95,8 +100,8 @@ def build_cache(w, h, frames, seed, params):
             "grid_rotation": float(params.get("grid_rotation", 0.0)),
             "vertical_angle": float(params.get("vertical_angle", 0.0)),
             "horizontal_angle": float(params.get("horizontal_angle", 0.0)),
-            "vertical_speed": float(params.get("vertical_speed", 0.45)),
-            "horizontal_speed": float(params.get("horizontal_speed", -0.35)),
+            "vertical_speed": float(params.get("vertical_speed", 0.4)),
+            "horizontal_speed": float(params.get("horizontal_speed", -0.4)),
             "line_fade": float(params.get("line_fade", 0.5)),
             "blur": float(params.get("blur", 1.2)),
         },
@@ -152,10 +157,13 @@ def render_frame(cache, i):
     vertical_mask = np.abs(vertical_offsets) <= (cache["line_extent"] + spacing + vertical_widths)
     horizontal_mask = np.abs(horizontal_offsets) <= (cache["line_extent"] + spacing + horizontal_widths)
 
-    img = Image.new("L", (w, h), 0)
+    ssaa = max(1, int(GRID_SUPERSAMPLE))
+    render_w = max(1, int(w * ssaa))
+    render_h = max(1, int(h * ssaa))
+    img = Image.new("L", (render_w, render_h), 0)
     draw = ImageDraw.Draw(img)
-    cx = 0.5 * (w - 1)
-    cy = 0.5 * (h - 1)
+    cx = 0.5 * (render_w - 1)
+    cy = 0.5 * (render_h - 1)
 
     _draw_line_family(
         draw,
@@ -164,7 +172,8 @@ def render_frame(cache, i):
         vertical_offsets[vertical_mask],
         vertical_widths[vertical_mask],
         vertical_angle,
-        cache["half_span"],
+        cache["half_span"] * ssaa,
+        coord_scale=float(ssaa),
     )
     _draw_line_family(
         draw,
@@ -173,7 +182,8 @@ def render_frame(cache, i):
         horizontal_offsets[horizontal_mask],
         horizontal_widths[horizontal_mask],
         horizontal_angle,
-        cache["half_span"],
+        cache["half_span"] * ssaa,
+        coord_scale=float(ssaa),
     )
 
     if diagonal_count > 0:
@@ -204,7 +214,8 @@ def render_frame(cache, i):
                     diag_offsets_a[diag_mask_a],
                     family_widths[diag_mask_a],
                     diag_angle_a,
-                    cache["half_span"],
+                    cache["half_span"] * ssaa,
+                    coord_scale=float(ssaa),
                 )
 
             if diagonal_count >= 2:
@@ -223,12 +234,16 @@ def render_frame(cache, i):
                         diag_offsets_b[diag_mask_b],
                         family_widths[diag_mask_b],
                         diag_angle_b,
-                        cache["half_span"],
+                        cache["half_span"] * ssaa,
+                        coord_scale=float(ssaa),
                     )
 
     blur = max(0.0, float(params.get("blur", defaults["blur"])))
     if blur > 0:
-        img = img.filter(ImageFilter.GaussianBlur(radius=blur))
+        img = img.filter(ImageFilter.GaussianBlur(radius=blur * ssaa))
+
+    if ssaa > 1:
+        img = img.resize((w, h), Image.Resampling.BOX)
 
     if line_intensity < 1.0:
         lut = [int(round(v * line_intensity)) for v in range(256)]
@@ -251,8 +266,8 @@ EFFECT = {
         {"key": "grid_rotation", "label": "全体の向き", "type": "float", "default": 0.0, "min": -180.0, "max": 180.0, "step": 1.0},
         {"key": "vertical_angle", "label": "縦線の角度", "type": "float", "default": 0.0, "min": -90.0, "max": 90.0, "step": 1.0},
         {"key": "horizontal_angle", "label": "横線の角度", "type": "float", "default": 0.0, "min": -90.0, "max": 90.0, "step": 1.0},
-        {"key": "vertical_speed", "label": "縦線の移動速度", "type": "float", "default": 0.45, "min": -4.0, "max": 4.0, "step": 0.05},
-        {"key": "horizontal_speed", "label": "横線の移動速度", "type": "float", "default": -0.35, "min": -4.0, "max": 4.0, "step": 0.05},
+        {"key": "vertical_speed", "label": "縦線の移動速度", "type": "float", "default": 0.4, "min": -4.0, "max": 4.0, "step": 0.05},
+        {"key": "horizontal_speed", "label": "横線の移動速度", "type": "float", "default": -0.4, "min": -4.0, "max": 4.0, "step": 0.05},
         {"key": "line_fade", "label": "線の薄さ", "type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
         {"key": "blur", "label": "ぼかし", "type": "float", "default": 1.2, "min": 0.0, "max": 8.0, "step": 0.1},
     ],

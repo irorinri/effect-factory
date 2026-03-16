@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 from PIL import Image, ImageEnhance, ImageFilter
 import numpy as np
 import os, sys
@@ -190,14 +192,36 @@ def _sprite_geometry_variant(cache: dict, width: float, height: float, angle_deg
     return img
 
 
+@lru_cache(maxsize=2048)
+def _sprite_alpha_lut(scale: float) -> tuple[int, ...]:
+    scale = float(np.clip(scale, 0.0, 1.0))
+    return tuple(int(round(px * scale)) for px in range(256))
+
+
 def _sprite_variant(cache: dict, width: float, height: float, angle_deg: float, alpha_mix: float, preserve_aspect: bool = False) -> Image.Image:
+    if preserve_aspect:
+        width = max(1, int(round(float(width))))
+        height = max(1, int(round(float(height))))
+    else:
+        width = max(1, int(round(float(width) / 2.0) * 2))
+        height = max(1, int(round(float(height) / 2.0) * 2))
+    angle_key = int(round(float(angle_deg))) % 360
     base = _sprite_geometry_variant(cache, width, height, angle_deg, preserve_aspect=preserve_aspect)
     scale = float(np.clip(alpha_mix, 0.0, 1.0))
     if scale >= 0.999:
         return base
+    alpha_cache = cache.setdefault("__sprite_alpha_variants__", {})
+    alpha_lut = _sprite_alpha_lut(scale)
+    cache_key = (width, height, angle_key, alpha_lut)
+    img = alpha_cache.get(cache_key)
+    if img is not None:
+        return img
     img = base.copy()
-    alpha = img.getchannel("A").point(lambda px, s=scale: int(round(px * s)))
+    alpha = img.getchannel("A").point(alpha_lut)
     img.putalpha(alpha)
+    if len(alpha_cache) > 4096:
+        alpha_cache.clear()
+    alpha_cache[cache_key] = img
     return img
 
 
@@ -289,6 +313,7 @@ def build_cache(w, h, frames, seed, params):
         "margin": margin,
         "ordered_speed_px": ordered_speed_px,
         "preserve_sprite_aspect": preserve_sprite_aspect,
+        "preserve_shape_trail": builtin_sprite not in {"circle", "square", "star"},
         "defaults": {
             "density": float(params.get("density", 1.0)),
             "size_min": float(params.get("size_min", 12.0)),
@@ -403,15 +428,21 @@ def render_frame(cache, i):
             continue
         if cache.get("preserve_sprite_aspect", False):
             height = base_height
-            trail_span = max(0.0, max(base_height, width * length * particle["stretch_mix"]) - base_height)
-            for trail_offset, trail_weight in _trail_samples(trail_span):
-                trail_alpha = alpha_mix * trail_weight
-                if trail_alpha <= 0.01:
-                    continue
-                stamp = _sprite_variant(cache, width, height, angle_deg, trail_alpha, preserve_aspect=True)
-                offset_x, offset_y = rotate_vector(0.0, trail_offset, motion_angle)
-                left = int(round((x + offset_x) - stamp.size[0] * 0.5))
-                top = int(round((y + offset_y) - stamp.size[1] * 0.5))
+            if cache.get("preserve_shape_trail", True):
+                trail_span = max(0.0, max(base_height, width * length * particle["stretch_mix"]) - base_height)
+                for trail_offset, trail_weight in _trail_samples(trail_span):
+                    trail_alpha = alpha_mix * trail_weight
+                    if trail_alpha <= 0.01:
+                        continue
+                    stamp = _sprite_variant(cache, width, height, angle_deg, trail_alpha, preserve_aspect=True)
+                    offset_x, offset_y = rotate_vector(0.0, trail_offset, motion_angle)
+                    left = int(round((x + offset_x) - stamp.size[0] * 0.5))
+                    top = int(round((y + offset_y) - stamp.size[1] * 0.5))
+                    layer.alpha_composite(stamp, dest=(left, top))
+            else:
+                stamp = _sprite_variant(cache, width, height, angle_deg, alpha_mix, preserve_aspect=True)
+                left = int(round(x - stamp.size[0] * 0.5))
+                top = int(round(y - stamp.size[1] * 0.5))
                 layer.alpha_composite(stamp, dest=(left, top))
         else:
             height = max(base_height, width * length * particle["stretch_mix"])

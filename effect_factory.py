@@ -630,7 +630,8 @@ class EffectFactoryApp(tk.Tk):
             widget.bind("<Button-5>", self._on_preview_mousewheel)
 
     def _params_for_plugin(self, plugin):
-        return [*plugin.params, *self.COMMON_PARAM_DESCS]
+        params = [*plugin.params, *self.COMMON_PARAM_DESCS]
+        return params
 
     def _param_types_for_plugin(self, plugin):
         return {p["key"]: p.get("type", "float") for p in self._params_for_plugin(plugin)}
@@ -810,10 +811,6 @@ class EffectFactoryApp(tk.Tk):
         ttk.Button(row2, text="コピー", command=self._copy_final_seed).pack(side="left", padx=4)
         self.btn_next_variant = ttk.Button(row2, text="次の見た目", command=self._next_preview_variant)
         self.btn_next_variant.pack(side="left", padx=(8, 0))
-
-        help_box = ttk.LabelFrame(body, text="ヘルプ")
-        help_box.pack(fill="x", pady=(0, 10))
-        ttk.Label(help_box, text="密度: 粒や模様の数を増減します\nぼかし: 柔らかい印象にします\n速度: 動きの速さです\nループ長: 何秒で自然につながるかを決めます", justify="left").pack(anchor="w", padx=10, pady=10)
 
     def _build_footer(self, parent):
         foot = ttk.LabelFrame(parent, text="書き出し")
@@ -1696,10 +1693,13 @@ class EffectFactoryApp(tk.Tk):
             return [
                 {"id": "zoom", "label": "ズーム", "help": zoom_help, "keys": ["camera_zoom"]},
                 {"id": "count", "label": "本数", "help": "集中線の本数です。", "keys": ["count"]},
+                {"id": "length", "label": "外周", "help": "線の伸びる長さです。", "keys": ["length"]},
                 {"id": "hole_radius", "label": "中心の抜き", "help": "中心の空白の大きさです。", "keys": ["hole_radius"]},
-                {"id": "length", "label": "長さ", "help": "線の伸びる長さです。", "keys": ["length"]},
+                {"id": "hole_spiral", "label": "抜きスパイラル", "help": "時計回りに進むほど内側終点を外へずらしていきます。", "keys": ["hole_spiral"]},
+                {"id": "hole_spiral_branches", "label": "抜き分岐", "help": "左で1本、右へ行くほど抜きスパイラルの本数を30本まで増やします。", "keys": ["hole_spiral_branches"]},
+                {"id": "hole_spiral_beta", "label": "抜きベータ", "help": "左で通常、中央で今までのベータ最大、右で抜きスパイラル反転になります。", "keys": ["hole_spiral_beta"]},
                 {"id": "width", "label": "太さ", "help": "線の外側の太さです。", "keys": ["width"]},
-                {"id": "taper", "label": "先細り", "help": "中心側をどれだけ細くするかです。", "keys": ["taper"]},
+                {"id": "focus_pointiness", "label": "尖り", "help": "左にするほど先端が尖り、右にするほど鈍くなります。", "keys": ["taper"]},
                 {"id": "size_randomness", "label": "サイズ揺らぎ", "help": "線ごとの長さや太さのばらつきです。", "keys": ["size_randomness"]},
                 {"id": "angle_randomness", "label": "角度揺らぎ", "help": "線の並び方のランダムさです。", "keys": ["angle_randomness"]},
                 {"id": "arc", "label": "広がり角度", "help": "集中線を出す角度範囲です。", "keys": ["arc"]},
@@ -1709,7 +1709,6 @@ class EffectFactoryApp(tk.Tk):
                 {"id": "center_y", "label": "中心Y", "help": "集中点の縦位置です。", "keys": ["center_y"]},
                 {"id": "wobble", "label": "中心揺れ", "help": "集中点を小さく動かします。", "keys": ["wobble"]},
                 {"id": "rotation_speed", "label": "回転速度", "help": "集中線全体を回転させます。", "keys": ["rotation_speed"]},
-                {"id": "pulse", "label": "伸縮", "help": "線の長さや勢いを脈打たせます。", "keys": ["pulse"]},
                 {"id": "flicker", "label": "明滅", "help": "線ごとの明るさの揺れです。", "keys": ["flicker"]},
                 {"id": "speed", "label": "速度", "help": "アニメーション全体の速さです。", "keys": ["speed"]},
                 {"id": "blur", "label": "ぼかし", "help": "線の縁を柔らかくします。", "keys": ["blur"]},
@@ -1724,9 +1723,8 @@ class EffectFactoryApp(tk.Tk):
         if plugin.id == "grid_lattice":
             return [
                 {"id": "zoom", "label": "ズーム", "help": zoom_help, "keys": ["camera_zoom"]},
-                {"id": "vertical_width", "label": "縦太さ", "help": "縦線群の太さを調整します。", "keys": ["vertical_width"]},
+                {"id": "grid_width_balance", "label": "縦/横太さ", "help": "中央で同じ太さです。左で縦線、右で横線を太くします。", "keys": ["vertical_width", "horizontal_width"]},
                 {"id": "vertical_width_randomness", "label": "縦太さランダム", "help": "縦線ごとの太さのばらつきを調整します。", "keys": ["vertical_width_randomness"]},
-                {"id": "horizontal_width", "label": "横太さ", "help": "横線群の太さを調整します。", "keys": ["horizontal_width"]},
                 {"id": "horizontal_width_randomness", "label": "横太さランダム", "help": "横線ごとの太さのばらつきを調整します。", "keys": ["horizontal_width_randomness"]},
                 {"id": "spacing", "label": "間隔", "help": "格子の粗密を調整します。", "keys": ["spacing"]},
                 {"id": "diagonal_count", "label": "斜め方向", "help": "交点どうしを斜めに結ぶ方向を 0 から 2 系統まで追加します。", "keys": ["diagonal_count"]},
@@ -1734,8 +1732,7 @@ class EffectFactoryApp(tk.Tk):
                 {"id": "grid_rotation", "label": "全体向き", "help": "格子全体の向きを回転させます。", "keys": ["grid_rotation"]},
                 {"id": "vertical_angle", "label": "縦角度", "help": "縦線群だけの角度を調整します。", "keys": ["vertical_angle"]},
                 {"id": "horizontal_angle", "label": "横角度", "help": "横線群だけの角度を調整します。", "keys": ["horizontal_angle"]},
-                {"id": "vertical_speed", "label": "縦速度", "help": "縦線群の移動速度を調整します。", "keys": ["vertical_speed"]},
-                {"id": "horizontal_speed", "label": "横速度", "help": "横線群の移動速度を調整します。", "keys": ["horizontal_speed"]},
+                {"id": "grid_speed_balance", "label": "縦/横速度", "help": "中央が標準です。左で縦線、右で横線を速くします。", "keys": ["vertical_speed", "horizontal_speed"]},
                 {"id": "line_fade", "label": "線の薄さ", "help": "線をどのくらい薄く見せるかを調整します。", "keys": ["line_fade"]},
                 {"id": "blur", "label": "ぼかし", "help": "線のにじみ具合を調整します。", "keys": ["blur"]},
                 {"id": "loop_length", "label": "ループ長", "help": "ループの長さを調整します。", "duration": True},
@@ -1745,16 +1742,20 @@ class EffectFactoryApp(tk.Tk):
             ("density", "密度", "粒や模様の数を増減します", ["density", "count", "strength", "intensity"]),
             ("size", "サイズ", "要素の大きさや太さです", ["width", "size_max", "size_min"]),
             ("size_randomness", "サイズランダム", "左で均一、右で粒ごとのサイズ差が増えます", ["size_randomness"]),
-            ("length", "尾引き", "粒の流れ方向に出る尾を調整します", ["length"]),
+        ]
+        if plugin.id == "light_rays":
+            defs.append(("length", "尾引き", "粒の流れ方向に出る尾を調整します", ["length"]))
+        defs.extend([
             ("speed", "速度", "動きの速さです", ["speed", "sweep"]),
             ("speed_randomness", "速度ランダム", "左で同じ速さ、右で粒ごとの速度差が増えます", ["speed_randomness"]),
             ("direction", "向き", "動きの向きを回転します", ["motion_direction"]),
             ("grid_alignment", "ランダム/整列", "左がランダム、右が流れに沿った等間隔の隊列になります", ["grid_alignment"]),
             ("blur", "ぼかし", "柔らかい印象にします", ["blur", "blur_far", "blur_mid", "blur_near"]),
             ("brightness", "明るさ", "全体の光り方を調整します", ["brightness", "glow_strength", "glow", "strength"]),
-            ("random", "ランダム感", "揺らぎやノイズの量です", ["twinkle", "flicker", "noise", "scanlines", "grain"]),
             ("color", "色味", "色の印象を切り替えます", ["color", "tint", "palette", "tint_r"]),
-        ]
+        ])
+        if plugin.id != "png_rain":
+            defs.append(("random", "ランダム感", "揺らぎやノイズの量です", ["twinkle", "flicker", "noise", "scanlines", "grain"]))
         used, out = set(), []
         for cid, label, help_text, keys in defs:
             match = [k for k in keys if k in self.param_desc and k not in used]
@@ -1823,10 +1824,20 @@ class EffectFactoryApp(tk.Tk):
                 for k in ["tint_r", "tint_g", "tint_b"]:
                     self.param_vars[k].trace_add("write", sync_color)
                 sync_color()
+            elif spec["id"] == "focus_pointiness":
+                self._build_focus_pointiness_control(row, spec)
+            elif spec["id"] == "grid_width_balance":
+                self._build_grid_width_balance_control(row, spec, plugin)
+            elif spec["id"] == "grid_speed_balance":
+                self._build_grid_speed_balance_control(row, spec, plugin)
             elif spec["id"] == "size":
                 self._build_size_quick_control(row, spec)
             else:
-                key = spec["keys"][0]
+                keys = [k for k in spec.get("keys", []) if k in self.param_desc]
+                if not keys:
+                    row.destroy()
+                    continue
+                key = keys[0]
                 p = self.param_desc[key]
                 var = self.param_vars[key]
                 if p.get("type") == "choice":
@@ -1898,6 +1909,213 @@ class EffectFactoryApp(tk.Tk):
         for k in keys:
             self.param_vars[k].trace_add("write", sync_size)
         sync_size()
+
+    def _build_focus_pointiness_control(self, row, spec):
+        key = next((k for k in spec["keys"] if k in self.param_vars), None)
+        if key is None:
+            ttk.Label(row, text="-").pack(side="left")
+            return
+        desc = self.param_desc[key]
+        low = float(desc.get("min", 0.0))
+        high = float(desc.get("max", max(low + 1.0, 1.0)))
+        span = max(1e-6, high - low)
+        scale_var = tk.DoubleVar(value=0.0)
+        value = ttk.Label(row, width=8)
+
+        def apply_pointiness(_v=None):
+            pos = max(0.0, min(1.0, float(scale_var.get())))
+            taper_value = high - span * pos
+            self.param_vars[key].set(round(taper_value, 3))
+
+        def sync_pointiness(*_):
+            if not value.winfo_exists():
+                return
+            taper_value = float(self.param_vars[key].get())
+            pos = max(0.0, min(1.0, (high - taper_value) / span))
+            scale_var.set(pos)
+            pointiness = (taper_value - low) / span
+            value.configure(text=f"{pointiness * 100:.0f}%")
+
+        ttk.Label(row, text="尖").pack(side="left", padx=(8, 4))
+        ttk.Scale(row, from_=0.0, to=1.0, variable=scale_var, command=lambda _v=None: (apply_pointiness(), self._on_ui_value_changed())).pack(side="left", fill="x", expand=True)
+        ttk.Label(row, text="鈍").pack(side="left", padx=(4, 8))
+        value.pack(side="left")
+        self.param_vars[key].trace_add("write", sync_pointiness)
+        sync_pointiness()
+
+    def _build_focus_pulse_rate_control(self, row, spec):
+        key = next((k for k in spec["keys"] if k in self.param_vars), None)
+        if key is None:
+            ttk.Label(row, text="-").pack(side="left")
+            return
+        desc = self.param_desc[key]
+        low = max(1e-6, float(desc.get("min", 0.25)))
+        high = max(low, float(desc.get("max", 4.0)))
+        max_factor = max(high, 1.0 / low)
+        scale_var = tk.DoubleVar(value=0.0)
+        value = ttk.Label(row, width=8)
+
+        def slider_to_rate(pos: float) -> float:
+            rate = float(max_factor ** (-float(pos)))
+            return max(low, min(high, rate))
+
+        def rate_to_slider(rate: float) -> float:
+            rate = max(low, min(high, float(rate)))
+            if max_factor <= 1.0 + 1e-9:
+                return 0.0
+            return max(-1.0, min(1.0, -np.log(rate) / np.log(max_factor)))
+
+        def apply_pulse_rate(_v=None):
+            rate = slider_to_rate(scale_var.get())
+            self.param_vars[key].set(round(rate, 3))
+
+        def sync_pulse_rate(*_):
+            if not value.winfo_exists():
+                return
+            rate = float(self.param_vars[key].get())
+            scale_var.set(rate_to_slider(rate))
+            value.configure(text=f"x{rate:.2f}")
+
+        ttk.Label(row, text="速").pack(side="left", padx=(8, 4))
+        ttk.Scale(row, from_=-1.0, to=1.0, variable=scale_var, command=lambda _v=None: (apply_pulse_rate(), self._on_ui_value_changed())).pack(side="left", fill="x", expand=True)
+        ttk.Label(row, text="遅").pack(side="left", padx=(4, 8))
+        value.pack(side="left")
+        self.param_vars[key].trace_add("write", sync_pulse_rate)
+        sync_pulse_rate()
+
+    def _build_grid_width_balance_control(self, row, spec, plugin):
+        keys = [k for k in spec["keys"] if k in self.param_vars]
+        if len(keys) < 2:
+            ttk.Label(row, text="-").pack(side="left")
+            return
+        vertical_key, horizontal_key = keys[0], keys[1]
+        vertical_desc = self.param_desc[vertical_key]
+        horizontal_desc = self.param_desc[horizontal_key]
+        vertical_lo = float(vertical_desc.get("min", 1.0))
+        vertical_hi = float(vertical_desc.get("max", max(vertical_lo + 1.0, 1.0)))
+        horizontal_lo = float(horizontal_desc.get("min", 1.0))
+        horizontal_hi = float(horizontal_desc.get("max", max(horizontal_lo + 1.0, 1.0)))
+        scale_var = tk.DoubleVar(value=0.0)
+        value = ttk.Label(row, width=16)
+
+        def balance_limit(avg_value: float) -> float:
+            return max(
+                0.0,
+                min(
+                    avg_value - vertical_lo,
+                    vertical_hi - avg_value,
+                    avg_value - horizontal_lo,
+                    horizontal_hi - avg_value,
+                ),
+            )
+
+        def current_values():
+            vertical_value = float(self.param_vars[vertical_key].get())
+            horizontal_value = float(self.param_vars[horizontal_key].get())
+            avg_value = 0.5 * (vertical_value + horizontal_value)
+            limit = balance_limit(avg_value)
+            return vertical_value, horizontal_value, avg_value, limit
+
+        def apply_balance(_v=None):
+            vertical_value, horizontal_value, avg_value, limit = current_values()
+            pos = max(-1.0, min(1.0, float(scale_var.get())))
+            if limit <= 1e-6:
+                new_vertical = vertical_value
+                new_horizontal = horizontal_value
+            else:
+                new_vertical = avg_value - pos * limit
+                new_horizontal = avg_value + pos * limit
+            new_vertical = self._quick_slider_snap_value(plugin, vertical_key, new_vertical, vertical_desc)
+            new_horizontal = self._quick_slider_snap_value(plugin, horizontal_key, new_horizontal, horizontal_desc)
+            self.param_vars[vertical_key].set(round(float(new_vertical), 3))
+            self.param_vars[horizontal_key].set(round(float(new_horizontal), 3))
+
+        def sync_balance(*_):
+            if not value.winfo_exists():
+                return
+            vertical_value, horizontal_value, avg_value, limit = current_values()
+            if limit <= 1e-6:
+                pos = 0.0
+            else:
+                pos = max(-1.0, min(1.0, (horizontal_value - vertical_value) / (2.0 * limit)))
+            scale_var.set(pos)
+            vertical_text = self._format_quick_scalar_value(plugin, vertical_desc, vertical_value)
+            horizontal_text = self._format_quick_scalar_value(plugin, horizontal_desc, horizontal_value)
+            value.configure(text=f"縦 {vertical_text} / 横 {horizontal_text}")
+
+        ttk.Label(row, text="縦").pack(side="left", padx=(8, 4))
+        ttk.Scale(row, from_=-1.0, to=1.0, variable=scale_var, command=lambda _v=None: (apply_balance(), self._on_ui_value_changed())).pack(side="left", fill="x", expand=True)
+        ttk.Label(row, text="横").pack(side="left", padx=(4, 8))
+        value.pack(side="left")
+        self.param_vars[vertical_key].trace_add("write", sync_balance)
+        self.param_vars[horizontal_key].trace_add("write", sync_balance)
+        sync_balance()
+
+    def _build_grid_speed_balance_control(self, row, spec, plugin):
+        keys = [k for k in spec["keys"] if k in self.param_vars]
+        if len(keys) < 2:
+            ttk.Label(row, text="-").pack(side="left")
+            return
+        vertical_key, horizontal_key = keys[0], keys[1]
+        vertical_desc = self.param_desc[vertical_key]
+        horizontal_desc = self.param_desc[horizontal_key]
+        state = {
+            "vertical_sign": (1.0 if float(self.param_vars[vertical_key].get()) >= 0.0 else -1.0),
+            "horizontal_sign": (1.0 if float(self.param_vars[horizontal_key].get()) >= 0.0 else -1.0),
+        }
+        scale_var = tk.DoubleVar(value=0.0)
+        value = ttk.Label(row, width=16)
+
+        def speed_limit(avg_value: float) -> float:
+            vertical_max = max(abs(float(vertical_desc.get("min", -4.0))), abs(float(vertical_desc.get("max", 4.0))))
+            horizontal_max = max(abs(float(horizontal_desc.get("min", -4.0))), abs(float(horizontal_desc.get("max", 4.0))))
+            return max(0.0, min(avg_value, vertical_max - avg_value, horizontal_max - avg_value))
+
+        def current_values():
+            vertical_value = float(self.param_vars[vertical_key].get())
+            horizontal_value = float(self.param_vars[horizontal_key].get())
+            if abs(vertical_value) > 1e-6:
+                state["vertical_sign"] = 1.0 if vertical_value >= 0.0 else -1.0
+            if abs(horizontal_value) > 1e-6:
+                state["horizontal_sign"] = 1.0 if horizontal_value >= 0.0 else -1.0
+            vertical_abs = abs(vertical_value)
+            horizontal_abs = abs(horizontal_value)
+            avg_value = 0.5 * (vertical_abs + horizontal_abs)
+            limit = speed_limit(avg_value)
+            return vertical_abs, horizontal_abs, avg_value, limit
+
+        def apply_speed_balance(_v=None):
+            vertical_abs, horizontal_abs, avg_value, limit = current_values()
+            pos = max(-1.0, min(1.0, float(scale_var.get())))
+            if limit <= 1e-6:
+                new_vertical_abs = vertical_abs
+                new_horizontal_abs = horizontal_abs
+            else:
+                new_vertical_abs = avg_value - pos * limit
+                new_horizontal_abs = avg_value + pos * limit
+            self.param_vars[vertical_key].set(round(state["vertical_sign"] * float(new_vertical_abs), 3))
+            self.param_vars[horizontal_key].set(round(state["horizontal_sign"] * float(new_horizontal_abs), 3))
+
+        def sync_speed_balance(*_):
+            if not value.winfo_exists():
+                return
+            vertical_abs, horizontal_abs, avg_value, limit = current_values()
+            if limit <= 1e-6:
+                pos = 0.0
+            else:
+                pos = max(-1.0, min(1.0, (horizontal_abs - vertical_abs) / (2.0 * limit)))
+            scale_var.set(pos)
+            vertical_text = self._format_quick_scalar_value(plugin, vertical_desc, state["vertical_sign"] * vertical_abs)
+            horizontal_text = self._format_quick_scalar_value(plugin, horizontal_desc, state["horizontal_sign"] * horizontal_abs)
+            value.configure(text=f"縦 {vertical_text} / 横 {horizontal_text}")
+
+        ttk.Label(row, text="縦").pack(side="left", padx=(8, 4))
+        ttk.Scale(row, from_=-1.0, to=1.0, variable=scale_var, command=lambda _v=None: (apply_speed_balance(), self._on_ui_value_changed())).pack(side="left", fill="x", expand=True)
+        ttk.Label(row, text="横").pack(side="left", padx=(4, 8))
+        value.pack(side="left")
+        self.param_vars[vertical_key].trace_add("write", sync_speed_balance)
+        self.param_vars[horizontal_key].trace_add("write", sync_speed_balance)
+        sync_speed_balance()
 
     def _pretty_label(self, p):
         return {
@@ -2065,8 +2283,8 @@ class EffectFactoryApp(tk.Tk):
         ratio = {"弱め": 0.18, "ふつう": 0.33, "強め": 0.52}.get(self.random_strength.get(), 0.33)
         groups = {
             "color": {"color", "tint", "palette", "tint_r", "tint_g", "tint_b", "nebula_r", "nebula_g", "nebula_b", "line_fade", "glow", "brightness", "grain"},
-            "shape": {"count", "density", "size_min", "size_max", "size_randomness", "width", "length", "layers", "shooting_stars", "vertical_width", "horizontal_width", "vertical_width_randomness", "horizontal_width_randomness", "spacing", "diagonal_count", "diagonal_span", "hole_radius", "taper", "angle_randomness", "arc", "spiral", "center_x", "center_y"},
-            "motion": {"speed", "speed_randomness", "sweep", "flicker", "twinkle", "drift_x_cycles", "drift_y_cycles", "tear_prob", "motion_direction", "grid_alignment", "cohesion_dispersion", "cohesion", "dispersion", "grid_rotation", "vertical_angle", "horizontal_angle", "vertical_speed", "horizontal_speed", "wobble", "rotation_speed", "pulse", "arc_rotation", "blur"},
+            "shape": {"count", "density", "size_min", "size_max", "size_randomness", "width", "length", "layers", "shooting_stars", "vertical_width", "horizontal_width", "vertical_width_randomness", "horizontal_width_randomness", "spacing", "diagonal_count", "diagonal_span", "hole_radius", "hole_spiral", "hole_spiral_branches", "hole_spiral_beta", "taper", "angle_randomness", "arc", "spiral", "center_x", "center_y"},
+            "motion": {"speed", "speed_randomness", "sweep", "flicker", "twinkle", "drift_x_cycles", "drift_y_cycles", "tear_prob", "motion_direction", "grid_alignment", "cohesion_dispersion", "cohesion", "dispersion", "grid_rotation", "vertical_angle", "horizontal_angle", "vertical_speed", "horizontal_speed", "wobble", "rotation_speed", "arc_rotation", "blur"},
         }
         locked = set()
         if self.random_lock_color.get(): locked |= groups["color"]
@@ -3023,6 +3241,3 @@ if __name__ == "__main__":
         raise SystemExit(0)
     app = EffectFactoryApp()
     app.mainloop()
-
-
-

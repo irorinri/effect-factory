@@ -1,6 +1,6 @@
 ﻿import math
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 
 BUILTIN_RAIN_SPRITE_IDS = ("drop", "circle", "square", "star")
@@ -21,8 +21,6 @@ def parse_builtin_rain_sprite_token(value: str):
 
 
 def _finalize_sprite(img: Image.Image, blur_radius: float) -> Image.Image:
-    if blur_radius > 0.0:
-        img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     try:
         bbox = img.getchannel("A").getbbox()
     except Exception:
