@@ -91,11 +91,58 @@ def _ffmpeg_no_window_flags():
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def _map_x26x_preset(preset: str) -> str:
+    table = {
+        "p1": "ultrafast",
+        "p2": "superfast",
+        "p3": "veryfast",
+        "p4": "fast",
+        "p5": "medium",
+        "p6": "slow",
+        "p7": "slower",
+    }
+    key = str(preset or "").strip()
+    return table.get(key, key or "medium")
+
+
+def _map_amf_quality(preset: str) -> str:
+    table = {
+        "p1": "speed",
+        "p2": "speed",
+        "p3": "balanced",
+        "p4": "balanced",
+        "p5": "balanced",
+        "p6": "quality",
+        "p7": "quality",
+    }
+    key = str(preset or "").strip()
+    return table.get(key, "balanced")
+
+
+def _build_ffmpeg_video_codec_args(encoder: str, preset: str, bitrate: str):
+    encoder = str(encoder or "").strip() or "libx264"
+    preset = str(preset or "").strip()
+    bitrate = str(bitrate or "").strip() or "12M"
+
+    args = ["-c:v", encoder]
+    if encoder in ("h264_nvenc", "hevc_nvenc", "av1_nvenc"):
+        args += ["-preset", (preset or "p4")]
+    elif encoder in ("libx264", "libx265"):
+        args += ["-preset", _map_x26x_preset(preset)]
+    elif encoder in ("h264_amf", "hevc_amf"):
+        args += ["-usage", "transcoding", "-quality", _map_amf_quality(preset)]
+    elif preset:
+        args += ["-preset", preset]
+
+    args += ["-b:v", bitrate]
+    return args
+
+
 def _ffmpeg_pipe_raw_rgb(ffmpeg_path, w, h, fps, out_mp4, encoder, nv_preset, bitrate):
     cmd = [
         ffmpeg_path, "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
         "-s", f"{w}x{h}", "-r", str(fps), "-i", "-",
-        "-an", "-c:v", encoder, "-preset", nv_preset, "-b:v", bitrate,
+        "-an", *_build_ffmpeg_video_codec_args(encoder, nv_preset, bitrate),
         "-pix_fmt", "yuv420p", "-movflags", "+faststart", out_mp4
     ]
     p = subprocess.Popen(
@@ -467,7 +514,9 @@ class EffectFactoryApp(tk.Tk):
         self.presets = load_presets(self.presets_dir)
 
         self.ffmpeg_path = tk.StringVar(value="ffmpeg")
-        self.output_dir = tk.StringVar(value="C:\\Users\\iro\\Desktop\\共有用\\effect素材")
+        self.output_dir = tk.StringVar(
+            value=os.path.join(os.path.expanduser("~"), "Desktop", "共有用", "effect素材")
+        )
         self.file_prefix = tk.StringVar(value="overlay")
         self.w = tk.IntVar(value=1920)
         self.h = tk.IntVar(value=1080)
@@ -484,6 +533,7 @@ class EffectFactoryApp(tk.Tk):
         self.live_preview_scale = tk.DoubleVar(value=0.33)
         self.live_preview_seconds = tk.DoubleVar(value=4.0)
         self.preview_auto_refresh = tk.BooleanVar(value=True)
+        self.preview_loop_markerize = tk.BooleanVar(value=False)
         self.preview_zoom_text = tk.StringVar(value="Zoom 100%")
         self.show_log = tk.BooleanVar(value=False)
         self.preview_status = tk.StringVar(value="プレビュー待機中")
@@ -614,7 +664,7 @@ class EffectFactoryApp(tk.Tk):
         ttk.Label(bar, text="FPS").pack(side="left", padx=(12, 4))
         ttk.OptionMenu(bar, self.live_preview_fps, self.live_preview_fps.get(), 10, 15, 20, 30, command=lambda *_: self._request_preview_rebuild(immediate=True)).pack(side="left")
         wrap = ttk.Frame(box)
-        wrap.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        wrap.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 6))
         wrap.rowconfigure(0, weight=1)
         wrap.columnconfigure(0, weight=1)
         self.preview_label = tk.Label(wrap, bg="#05080b", fg="#dfe8ef", text="プレビュー準備中", font=("", 18, "bold"))
@@ -628,6 +678,15 @@ class EffectFactoryApp(tk.Tk):
             widget.bind("<MouseWheel>", self._on_preview_mousewheel)
             widget.bind("<Button-4>", self._on_preview_mousewheel)
             widget.bind("<Button-5>", self._on_preview_mousewheel)
+        loop_row = ttk.Frame(box)
+        loop_row.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        ttk.Checkbutton(
+            loop_row,
+            text="プレビューループマーカー化",
+            variable=self.preview_loop_markerize,
+            command=self._on_preview_loop_markerize_toggle,
+        ).pack(side="left")
+        ttk.Label(loop_row, text="ON中は終端→始端を補間して、ループ時のつなぎ目をなめらかにします。", foreground="#7d8d9a").pack(side="left", padx=(10, 0))
 
     def _params_for_plugin(self, plugin):
         params = [*plugin.params, *self.COMMON_PARAM_DESCS]
@@ -891,7 +950,7 @@ class EffectFactoryApp(tk.Tk):
         ttk.Label(row3, text="ffmpeg").pack(side="left")
         ttk.Entry(row3, textvariable=self.ffmpeg_path, width=12).pack(side="left", padx=(4, 8))
         ttk.Label(row3, text="Encoder").pack(side="left")
-        ttk.Combobox(row3, textvariable=self.encoder, state="readonly", values=["h264_nvenc", "libx264"], width=12).pack(side="left", padx=(4, 8))
+        ttk.Combobox(row3, textvariable=self.encoder, state="readonly", values=["h264_nvenc", "h264_amf", "libx264"], width=12).pack(side="left", padx=(4, 8))
         ttk.Label(row3, text="Preset").pack(side="left")
         ttk.Combobox(row3, textvariable=self.nv_preset, state="readonly", values=["p1", "p2", "p3", "p4", "p5", "p6", "p7"], width=6).pack(side="left", padx=(4, 8))
         ttk.Label(row3, text="Bitrate").pack(side="left")
@@ -1069,6 +1128,15 @@ class EffectFactoryApp(tk.Tk):
         out.sort(key=lambda item: (item["time_sec"], order.get(item["label"], 999)))
         return out
 
+    def _loop_markerize_enabled(self) -> bool:
+        return bool(self.loop_mode.get()) and bool(self.preview_loop_markerize.get())
+
+    def _preview_loop_markerize_enabled(self) -> bool:
+        return self._loop_markerize_enabled()
+
+    def _on_preview_loop_markerize_toggle(self):
+        self._sync_param_ui_to_timeline_position()
+
     def _sync_preview_runtime_from_ui(self):
         with self._preview_runtime_lock:
             self._preview_runtime["playhead_sec"] = float(self.timeline_position.get())
@@ -1121,6 +1189,8 @@ class EffectFactoryApp(tk.Tk):
             current_state,
             timeline_states,
             float(self.timeline_position.get()),
+            wrap_markers=self._loop_markerize_enabled(),
+            duration_sec=self._timeline_duration(),
         )
         was_restoring = self._ui_restoring
         self._ui_restoring = True
@@ -2145,7 +2215,8 @@ class EffectFactoryApp(tk.Tk):
                 "preview_scale": float(self.preview_scale.get()), "preview_seconds": float(self.preview_seconds.get()),
                 "live_preview_scale": float(self.live_preview_scale.get()), "live_preview_fps": int(self.live_preview_fps.get()),
                 "live_preview_seconds": float(self.live_preview_seconds.get()), "output_dir": self.output_dir.get(),
-                "file_prefix": self.file_prefix.get(), "loop_mode": bool(self.loop_mode.get())
+                "file_prefix": self.file_prefix.get(), "loop_mode": bool(self.loop_mode.get()),
+                "preview_loop_markerize": bool(self.preview_loop_markerize.get())
             },
             "random": {"base_seed": int(self.base_seed.get()), "randomize": bool(self.randomize.get()), "variant": int(self.variant.get())},
             "params": {k: v.get() for k, v in self.param_vars.items()},
@@ -2207,7 +2278,7 @@ class EffectFactoryApp(tk.Tk):
             self.encoder.set(out["encoder"]); self.nv_preset.set(out["nv_preset"]); self.bitrate.set(out["bitrate"])
             self.preview_scale.set(float(out["preview_scale"])); self.preview_seconds.set(float(out["preview_seconds"]))
             self.live_preview_scale.set(float(out["live_preview_scale"])); self.live_preview_fps.set(int(out["live_preview_fps"])); self.live_preview_seconds.set(float(out["live_preview_seconds"]))
-            self.output_dir.set(out["output_dir"]); self.file_prefix.set(out["file_prefix"]); self.loop_mode.set(bool(out["loop_mode"]))
+            self.output_dir.set(out["output_dir"]); self.file_prefix.set(out["file_prefix"]); self.loop_mode.set(bool(out["loop_mode"])); self.preview_loop_markerize.set(bool(out.get("preview_loop_markerize", False)))
             rnd = snap["random"]
             self.base_seed.set(int(rnd["base_seed"])); self.randomize.set(bool(rnd["randomize"])); self.variant.set(int(rnd["variant"])); self.variant_text.set(str(int(rnd["variant"])))
             self._apply_preset(self.presets.get(self.preset_name.get()))
@@ -2719,46 +2790,70 @@ class EffectFactoryApp(tk.Tk):
         except Exception:
             return left_value if mix < 1.0 else right_value
 
-    def _runtime_params_for_time(self, plugin, current_state, timeline_states, time_sec: float):
+    def _runtime_params_for_time(self, plugin, current_state, timeline_states, time_sec: float, wrap_markers: bool = False, duration_sec: float = None):
         runtime = dict(current_state["runtime"])
         if not timeline_states:
             return runtime
         states = list(timeline_states)
         param_types = self._param_types_for_plugin(plugin)
-        if time_sec <= float(states[0].get("time_sec", 0.0)):
+        base_params = current_state["resolved_params"]
+        if len(states) == 1:
             runtime.update(states[0]["resolved_params"])
-        elif time_sec >= float(states[-1].get("time_sec", 0.0)):
-            runtime.update(states[-1]["resolved_params"])
         else:
-            left = states[0]
-            right = states[-1]
-            mix = 0.0
-            for candidate_left, candidate_right in zip(states, states[1:]):
-                right_time = float(candidate_right.get("time_sec", 0.0))
-                if time_sec <= right_time + 1e-9:
-                    left = candidate_left
-                    right = candidate_right
-                    left_time = float(candidate_left.get("time_sec", 0.0))
-                    span = max(1e-6, right_time - left_time)
-                    mix = 0.0 if time_sec <= left_time else _clamp01((time_sec - left_time) / span)
-                    break
-            base_params = current_state["resolved_params"]
-            for p in self._params_for_plugin(plugin):
-                key = p["key"]
-                default = base_params.get(key, p.get("default"))
-                if key == "motion_direction":
-                    runtime[key] = _motion_direction_value_for_time(states, time_sec, default)
-                    continue
-                left_value = left["resolved_params"].get(key, default)
-                right_value = right["resolved_params"].get(key, left_value)
-                runtime[key] = self._interpolate_param_value(key, param_types.get(key, "float"), left_value, right_value, mix)
+            if duration_sec is None:
+                frames = int(current_state["runtime"].get("__frames__", 1))
+                fps = int(current_state["runtime"].get("__fps__", 30))
+                duration_sec = max(1e-6, frames / float(max(1, fps)))
+            else:
+                duration_sec = max(1e-6, float(duration_sec))
+            first_time = float(states[0].get("time_sec", 0.0))
+            last_time = float(states[-1].get("time_sec", 0.0))
+            wrap_active = bool(wrap_markers) and bool(current_state["runtime"].get("__loop__", False)) and len(states) >= 2 and (time_sec < first_time - 1e-9 or time_sec > last_time + 1e-9)
+            if wrap_active:
+                left = states[-1]
+                right = states[0]
+                wrap_span = max(1e-6, max(0.0, duration_sec - last_time) + max(0.0, first_time))
+                elapsed = (time_sec - last_time) if time_sec >= last_time else (max(0.0, duration_sec - last_time) + max(0.0, time_sec))
+                mix = _clamp01(elapsed / wrap_span)
+                for p in self._params_for_plugin(plugin):
+                    key = p["key"]
+                    default = base_params.get(key, p.get("default"))
+                    left_value = left["resolved_params"].get(key, default)
+                    right_value = right["resolved_params"].get(key, left_value)
+                    runtime[key] = self._interpolate_param_value(key, param_types.get(key, "float"), left_value, right_value, mix)
+            elif time_sec <= first_time:
+                runtime.update(states[0]["resolved_params"])
+            elif time_sec >= last_time:
+                runtime.update(states[-1]["resolved_params"])
+            else:
+                left = states[0]
+                right = states[-1]
+                mix = 0.0
+                for candidate_left, candidate_right in zip(states, states[1:]):
+                    right_time = float(candidate_right.get("time_sec", 0.0))
+                    if time_sec <= right_time + 1e-9:
+                        left = candidate_left
+                        right = candidate_right
+                        left_time = float(candidate_left.get("time_sec", 0.0))
+                        span = max(1e-6, right_time - left_time)
+                        mix = 0.0 if time_sec <= left_time else _clamp01((time_sec - left_time) / span)
+                        break
+                for p in self._params_for_plugin(plugin):
+                    key = p["key"]
+                    default = base_params.get(key, p.get("default"))
+                    if key == "motion_direction":
+                        runtime[key] = _motion_direction_value_for_time(states, time_sec, default)
+                        continue
+                    left_value = left["resolved_params"].get(key, default)
+                    right_value = right["resolved_params"].get(key, left_value)
+                    runtime[key] = self._interpolate_param_value(key, param_types.get(key, "float"), left_value, right_value, mix)
 
         runtime["__loop__"] = bool(current_state["runtime"].get("__loop__", False))
         runtime["__frames__"] = int(current_state["runtime"].get("__frames__", 1))
         runtime["__fps__"] = int(current_state["runtime"].get("__fps__", 30))
         return runtime
 
-    def _render_frame_at_time(self, plugin, render_context, frame_i: int, time_sec: float, apply_camera_zoom: bool = True):
+    def _render_frame_at_time(self, plugin, render_context, frame_i: int, time_sec: float, apply_camera_zoom: bool = True, wrap_markers: bool = False, duration_sec: float = None):
         if not render_context:
             raise ValueError("render context is empty")
         cache = render_context["cache"]
@@ -2767,6 +2862,8 @@ class EffectFactoryApp(tk.Tk):
             render_context["current_state"],
             render_context.get("timeline_states", []),
             time_sec,
+            wrap_markers=wrap_markers,
+            duration_sec=duration_sec,
         )
         cache["__runtime_params__"] = runtime
         img = plugin.render_frame(cache, max(0, int(frame_i)))
@@ -2802,7 +2899,7 @@ class EffectFactoryApp(tk.Tk):
             preset_name = (preset or {}).get("name", "custom")
             eff_id = self.effect_id.get(); w, h, fps = int(self.w.get()), int(self.h.get()), int(self.fps.get())
             mp4, _, _ = self._make_outputs(preset_name, eff_id, w, h, fps, outdir)
-            cmd = [self.ffmpeg_path.get().strip(), "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "-", "-an", "-c:v", self.encoder.get(), "-preset", self.nv_preset.get(), "-b:v", self.bitrate.get().strip(), "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4]
+            cmd = [self.ffmpeg_path.get().strip(), "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps), "-i", "-", "-an", *_build_ffmpeg_video_codec_args(self.encoder.get(), self.nv_preset.get(), self.bitrate.get().strip()), "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4]
             self._log("---- ffmpeg command (preview) ----")
             self._log(" ".join([f'"{c}"' if " " in c else c for c in cmd]))
             self._log("----------------------------------\n")
@@ -2907,7 +3004,7 @@ class EffectFactoryApp(tk.Tk):
                 var.trace_add("write", lambda *_: self._on_ui_value_changed())
             except Exception:
                 pass
-        for v in [self.preset_name, self.effect_id, self.w, self.h, self.fps, self.duration, self.loop_mode, self.base_seed, self.live_preview, self.live_preview_fps, self.live_preview_scale, self.live_preview_seconds]:
+        for v in [self.preset_name, self.effect_id, self.w, self.h, self.fps, self.duration, self.loop_mode, self.base_seed, self.live_preview, self.live_preview_fps, self.live_preview_scale, self.live_preview_seconds, self.preview_loop_markerize]:
             hook(v)
         self.output_dir.trace_add("write", lambda *_: (self._sync_variant_from_state(force=True), self._update_random_ui_state(), self._request_preview_rebuild(immediate=True)))
 
@@ -2975,6 +3072,7 @@ class EffectFactoryApp(tk.Tk):
             "output_frames": output_frames,
             "current_state": current_state,
             "timeline_states": timeline_states,
+            "wrap_loop_markers": self._loop_markerize_enabled(),
         }
 
     def _next_preview_variant(self):
@@ -2999,6 +3097,7 @@ class EffectFactoryApp(tk.Tk):
         output_fps = 30
         output_frames = 2
         duration_sec = 1.0
+        wrap_loop_markers = False
         last_frame_key = None
         loading_pending = False
         last = time.perf_counter()
@@ -3025,6 +3124,7 @@ class EffectFactoryApp(tk.Tk):
                     output_fps = int(snap["output_fps"])
                     output_frames = int(snap["output_frames"])
                     duration_sec = float(snap["duration_sec"])
+                    wrap_loop_markers = bool(snap.get("wrap_loop_markers", False))
                     render_context = self._build_render_context(
                         plugin,
                         int(snap["w"]),
@@ -3046,7 +3146,15 @@ class EffectFactoryApp(tk.Tk):
                     time.sleep(0.03)
                     last = time.perf_counter()
                     continue
-                img = self._render_frame_at_time(plugin, render_context, frame_i, sample_time_sec, apply_camera_zoom=False)
+                img = self._render_frame_at_time(
+                    plugin,
+                    render_context,
+                    frame_i,
+                    sample_time_sec,
+                    apply_camera_zoom=False,
+                    wrap_markers=wrap_loop_markers,
+                    duration_sec=duration_sec,
+                )
                 last_frame_key = frame_key
                 try:
                     while True:
@@ -3121,13 +3229,14 @@ class EffectFactoryApp(tk.Tk):
             if timeline_states:
                 summary = ", ".join(f"{state['label']}={self._format_seconds(state['time_sec'])}" for state in timeline_states)
                 self.msgq.put(("log", f"[PREVIEW] timeline: {summary}"))
+            wrap_loop_markers = self._loop_markerize_enabled()
             render_context = self._build_render_context(plugin, w, h, frames, current_state, timeline_states)
             p, cmd = _ffmpeg_pipe_raw_rgb(self.ffmpeg_path.get().strip(), w, h, fps, mp4, self.encoder.get(), self.nv_preset.get(), "6M")
             self.msgq.put(("log", "[PREVIEW] FFmpeg: " + " ".join([f'"{c}"' if " " in c else c for c in cmd])))
             first_img = None
             for i in range(frames):
                 time_sec = _frame_time_sec(i, fps, duration)
-                img = self._render_frame_at_time(plugin, render_context, i, time_sec)
+                img = self._render_frame_at_time(plugin, render_context, i, time_sec, wrap_markers=wrap_loop_markers, duration_sec=duration)
                 if first_img is None:
                     first_img = img.copy()
                 p.stdin.write(img.tobytes())
@@ -3142,7 +3251,7 @@ class EffectFactoryApp(tk.Tk):
                 "preset_name": preset_name, "effect_id": eff_id, "effect_name": plugin.name, "preview": True,
                 "output": {"w": w, "h": h, "fps": fps, "duration": duration, "frames": frames, "encoder": self.encoder.get(), "nv_preset": self.nv_preset.get(), "bitrate": "6M"},
                 "random": {"base_seed": current_state["base_seed"], "variant": current_state["variant"], "final_seed": current_state["final_seed"]},
-                "params": current_state["resolved_params"], "timeline": self._timeline_meta(current_state, timeline_states), "outputs": {"mp4": mp4, "thumb": thumb}, "created": _now_ts(), "note": "Preview MP4"
+                "params": current_state["resolved_params"], "timeline": self._timeline_meta(current_state, timeline_states), "loop_markerize": bool(wrap_loop_markers), "outputs": {"mp4": mp4, "thumb": thumb}, "created": _now_ts(), "note": "Preview MP4"
             })
             self.msgq.put(("sync_random_ui", {"variant": current_state["variant"], "final_seed": current_state["final_seed"]}))
             self.msgq.put(("log", f"[PREVIEW] 完了: {mp4}"))
@@ -3170,12 +3279,13 @@ class EffectFactoryApp(tk.Tk):
             if timeline_states:
                 summary = ", ".join(f"{state['label']}={self._format_seconds(state['time_sec'])}" for state in timeline_states)
                 self.msgq.put(("log", f"timeline: {summary}"))
+            wrap_loop_markers = self._loop_markerize_enabled()
             render_context = self._build_render_context(plugin, w, h, frames, current_state, timeline_states)
             p, cmd = _ffmpeg_pipe_raw_rgb(self.ffmpeg_path.get().strip(), w, h, fps, mp4, self.encoder.get(), self.nv_preset.get(), self.bitrate.get().strip() or "12M")
             self.msgq.put(("log", "FFmpeg: " + " ".join([f'"{c}"' if " " in c else c for c in cmd])))
             for i in range(frames):
                 time_sec = _frame_time_sec(i, fps, duration)
-                img = self._render_frame_at_time(plugin, render_context, i, time_sec)
+                img = self._render_frame_at_time(plugin, render_context, i, time_sec, wrap_markers=wrap_loop_markers, duration_sec=duration)
                 p.stdin.write(img.tobytes())
                 if i % max(1, frames // 100) == 0:
                     self.msgq.put(("progress", int(i * 100 / frames)))
@@ -3186,7 +3296,7 @@ class EffectFactoryApp(tk.Tk):
                 "preset_name": preset_name, "effect_id": eff_id, "effect_name": plugin.name,
                 "output": {"w": w, "h": h, "fps": fps, "duration": duration, "frames": frames, "encoder": self.encoder.get(), "nv_preset": self.nv_preset.get(), "bitrate": self.bitrate.get().strip()},
                 "random": {"base_seed": current_state["base_seed"], "variant": current_state["variant"], "final_seed": current_state["final_seed"]},
-                "params": current_state["resolved_params"], "timeline": self._timeline_meta(current_state, timeline_states), "outputs": {"mp4": mp4}, "created": _now_ts(), "note": "Black background overlay. Use Screen/Add blend in PV editor."
+                "params": current_state["resolved_params"], "timeline": self._timeline_meta(current_state, timeline_states), "loop_markerize": bool(wrap_loop_markers), "outputs": {"mp4": mp4}, "created": _now_ts(), "note": "Black background overlay. Use Screen/Add blend in PV editor."
             })
             self.last_export_mp4 = mp4
             self.msgq.put(("sync_random_ui", {"variant": current_state["variant"], "final_seed": current_state["final_seed"]}))

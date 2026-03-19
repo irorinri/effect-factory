@@ -15,6 +15,18 @@ def _animated_time(loop: bool, duration_sec: float, u: float, t_sec: float, spee
     return float(base_time) * float(speed)
 
 
+def _symmetric_visibility_layout(target: float, min_count: int = 1):
+    active_target = max(float(min_count), float(target))
+    slot_count = max(int(min_count), int(np.ceil(active_target - 1e-6)))
+    base_pos = (np.arange(slot_count, dtype=np.float32) + 0.5) / float(slot_count)
+    visibility = np.ones(slot_count, dtype=np.float32)
+    full_slots = int(np.floor(active_target + 1e-6))
+    if full_slots < slot_count:
+        visibility[full_slots:] = 0.0
+        visibility[full_slots] = float(np.clip(active_target - float(full_slots), 0.0, 1.0))
+    return base_pos, visibility
+
+
 def _curve_polygon(cx: float, cy: float, angle0: float, spiral: float, r0: float, r1: float, w0: float, w1: float):
     radii = [r0, r0 + (r1 - r0) * 0.58, r1]
     angles = [angle0, angle0 + spiral * 0.5, angle0 + spiral]
@@ -66,7 +78,11 @@ def _cut_center(mask: Image.Image, cx: float, cy: float, radius: float, feather:
 def build_cache(w, h, frames, seed, params):
     rng = np.random.default_rng(int(seed) & 0x7FFFFFFF)
     loop = bool(params.get('__loop__', False))
-    max_count = max(1, max_int(params, 'count', 160))
+    max_count = max(
+        1,
+        max_int(params, 'count', 160),
+        max_int(params, 'hole_spiral_branches', 1),
+    )
 
     base_pos = (np.arange(max_count, dtype=np.float32) + 0.5) / float(max_count)
     base_pos = np.mod(
@@ -140,7 +156,7 @@ def render_frame(cache, i):
 
     speed = max(0.0, float(params.get('speed', defaults['speed'])))
     anim_time = _animated_time(loop, duration_sec, u, t_sec, speed)
-    count = min(float(cache['max_count']), max(0.0, float(params.get('count', defaults['count']))))
+    requested_count = min(float(cache['max_count']), max(0.0, float(params.get('count', defaults['count']))))
     base_length = max(0.0, cache['radius'] * float(params.get('length', defaults['length'])))
     base_width = max(1.0, float(params.get('width', defaults['width'])))
     hole_radius = max(0.0, float(params.get('hole_radius', defaults['hole_radius'])))
@@ -169,12 +185,22 @@ def render_frame(cache, i):
 
     full_burst = arc_deg >= 359.5
     arc_rad = np.deg2rad(arc_deg)
-    slot_rad = ((2.0 * np.pi) if full_burst else arc_rad) / float(max(1, cache['max_count']))
     base_rotation = arc_rotation + rotation_speed * anim_time
+    symmetry_locked = hole_spiral_branches > 1 and (hole_radius > 0.0 or hole_spiral > 0.0)
+    min_layout_count = hole_spiral_branches if symmetry_locked else 1
+    line_count = max(requested_count, float(min_layout_count)) if symmetry_locked else requested_count
 
     global_length_scale = 1.0
     global_alpha_scale = 1.0
-    base_pos_start = float(cache['base_pos'][0]) if len(cache['base_pos']) else 0.0
+    if symmetry_locked:
+        base_positions, line_visibility = _symmetric_visibility_layout(line_count, min_layout_count)
+        slot_count = len(base_positions)
+    else:
+        base_positions = cache['base_pos']
+        line_visibility = None
+        slot_count = cache['max_count']
+    slot_rad = ((2.0 * np.pi) if full_burst else arc_rad) / float(max(1, slot_count))
+    base_pos_start = float(base_positions[0]) if len(base_positions) else 0.0
 
     mask = Image.new('L', (w, h), 0)
     draw = ImageDraw.Draw(mask)
@@ -186,8 +212,11 @@ def render_frame(cache, i):
             fill=255,
         )
     else:
-        for idx, base_pos in enumerate(cache['base_pos']):
-            vis = _visible_fraction(count, int(cache['draw_rank'][idx]))
+        for idx, base_pos in enumerate(base_positions):
+            if symmetry_locked:
+                vis = float(line_visibility[idx])
+            else:
+                vis = _visible_fraction(requested_count, int(cache['draw_rank'][idx]))
             if vis <= 0.0:
                 continue
 
@@ -209,7 +238,7 @@ def render_frame(cache, i):
                 if full_burst:
                     clockwise_progress = float(np.mod(float(base_pos) - base_pos_start, 1.0))
                 else:
-                    clockwise_progress = idx / float(max(1, cache['max_count'] - 1))
+                    clockwise_progress = idx / float(max(1, slot_count - 1))
                 clockwise_progress = max(0.0, min(0.999999, clockwise_progress))
                 branch_progress = float(np.mod(clockwise_progress * float(hole_spiral_branches), 1.0))
                 raw_beta_progress = 4.0 * branch_progress * (1.0 - branch_progress)
