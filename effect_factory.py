@@ -1770,6 +1770,7 @@ class EffectFactoryApp(tk.Tk):
                 {"id": "hole_spiral_beta", "label": "抜きベータ", "help": "左で通常、中央で今までのベータ最大、右で抜きスパイラル反転になります。", "keys": ["hole_spiral_beta"]},
                 {"id": "width", "label": "太さ", "help": "線の外側の太さです。", "keys": ["width"]},
                 {"id": "focus_pointiness", "label": "尖り", "help": "左にするほど先端が尖り、右にするほど鈍くなります。", "keys": ["taper"]},
+                {"id": "outer_pointiness", "label": "外周尖り", "help": "左にするほど外周側が尖り、右にするほど平らになります。", "keys": ["outer_taper"]},
                 {"id": "size_randomness", "label": "サイズ揺らぎ", "help": "線ごとの長さや太さのばらつきです。", "keys": ["size_randomness"]},
                 {"id": "angle_randomness", "label": "角度揺らぎ", "help": "線の並び方のランダムさです。", "keys": ["angle_randomness"]},
                 {"id": "arc", "label": "広がり角度", "help": "集中線を出す角度範囲です。", "keys": ["arc"]},
@@ -1894,7 +1895,7 @@ class EffectFactoryApp(tk.Tk):
                 for k in ["tint_r", "tint_g", "tint_b"]:
                     self.param_vars[k].trace_add("write", sync_color)
                 sync_color()
-            elif spec["id"] == "focus_pointiness":
+            elif spec["id"] in {"focus_pointiness", "outer_pointiness"}:
                 self._build_focus_pointiness_control(row, spec)
             elif spec["id"] == "grid_width_balance":
                 self._build_grid_width_balance_control(row, spec, plugin)
@@ -2354,7 +2355,7 @@ class EffectFactoryApp(tk.Tk):
         ratio = {"弱め": 0.18, "ふつう": 0.33, "強め": 0.52}.get(self.random_strength.get(), 0.33)
         groups = {
             "color": {"color", "tint", "palette", "tint_r", "tint_g", "tint_b", "nebula_r", "nebula_g", "nebula_b", "line_fade", "glow", "brightness", "grain"},
-            "shape": {"count", "density", "size_min", "size_max", "size_randomness", "width", "length", "layers", "shooting_stars", "vertical_width", "horizontal_width", "vertical_width_randomness", "horizontal_width_randomness", "spacing", "diagonal_count", "diagonal_span", "hole_radius", "hole_spiral", "hole_spiral_branches", "hole_spiral_beta", "taper", "angle_randomness", "arc", "spiral", "center_x", "center_y"},
+            "shape": {"count", "density", "size_min", "size_max", "size_randomness", "width", "length", "layers", "shooting_stars", "vertical_width", "horizontal_width", "vertical_width_randomness", "horizontal_width_randomness", "spacing", "diagonal_count", "diagonal_span", "hole_radius", "hole_spiral", "hole_spiral_branches", "hole_spiral_beta", "taper", "outer_taper", "angle_randomness", "arc", "spiral", "center_x", "center_y"},
             "motion": {"speed", "speed_randomness", "sweep", "flicker", "twinkle", "drift_x_cycles", "drift_y_cycles", "tear_prob", "motion_direction", "grid_alignment", "cohesion_dispersion", "cohesion", "dispersion", "grid_rotation", "vertical_angle", "horizontal_angle", "vertical_speed", "horizontal_speed", "wobble", "rotation_speed", "arc_rotation", "blur"},
         }
         locked = set()

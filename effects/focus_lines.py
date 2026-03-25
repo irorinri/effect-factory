@@ -52,7 +52,7 @@ def _curve_polygon(cx: float, cy: float, angle0: float, spiral: float, r0: float
     left = []
     right = []
     for point_idx, ((x, y), tangent, width) in enumerate(zip(points, tangents, widths)):
-        min_half_width = 0.0 if point_idx == 0 else 0.5
+        min_half_width = 0.0 if point_idx in (0, len(points) - 1) else 0.5
         half_width = max(min_half_width, 0.5 * float(width))
         nx = -float(np.sin(tangent))
         ny = float(np.cos(tangent))
@@ -125,6 +125,7 @@ def build_cache(w, h, frames, seed, params):
             'hole_spiral_branches': float(params.get('hole_spiral_branches', 1.0)),
             'hole_spiral_beta': float(params.get('hole_spiral_beta', 0.0)),
             'taper': float(params.get('taper', 0.82)),
+            'outer_taper': float(params.get('outer_taper', 0.0)),
             'size_randomness': float(params.get('size_randomness', 0.35)),
             'angle_randomness': float(params.get('angle_randomness', 0.10)),
             'arc': float(params.get('arc', 360.0)),
@@ -164,6 +165,7 @@ def render_frame(cache, i):
     hole_spiral_branches = int(np.clip(round(float(params.get('hole_spiral_branches', defaults['hole_spiral_branches']))), 1, 30))
     hole_spiral_beta = float(np.clip(params.get('hole_spiral_beta', defaults['hole_spiral_beta']), 0.0, 2.0))
     taper = float(np.clip(params.get('taper', defaults['taper']), 0.0, 0.97))
+    outer_taper = float(np.clip(params.get('outer_taper', defaults['outer_taper']), 0.0, 1.0))
     size_randomness = float(np.clip(params.get('size_randomness', defaults['size_randomness']), 0.0, 1.0))
     angle_randomness = float(np.clip(params.get('angle_randomness', defaults['angle_randomness']), 0.0, 1.0))
     arc_deg = float(np.clip(params.get('arc', defaults['arc']), 20.0, 360.0))
@@ -262,7 +264,7 @@ def render_frame(cache, i):
                 )
                 inner_radius = max(0.0, min(inner_radius, outer_radius - 4.0))
                 inner_width = max(0.5, line_width * (1.0 - taper))
-            outer_width = max(1.0, line_width)
+            outer_width = max(0.0, line_width * (1.0 - outer_taper))
             polygon = _curve_polygon(center_x, center_y, base_angle, local_spiral, inner_radius, outer_radius, inner_width, outer_width)
 
             local_flicker = 1.0
@@ -315,6 +317,7 @@ EFFECT = {
         {'key': 'hole_spiral_branches', 'label': '抜きスパイラル分岐', 'type': 'int', 'default': 1, 'min': 1, 'max': 30, 'step': 1},
         {'key': 'hole_spiral_beta', 'label': '抜きスパイラルベータ', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 2.0, 'step': 0.02},
         {'key': 'taper', 'label': '先細り', 'type': 'float', 'default': 0.82, 'min': 0.0, 'max': 0.97, 'step': 0.01},
+        {'key': 'outer_taper', 'label': '外周先細り', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 1.0, 'step': 0.01},
         {'key': 'size_randomness', 'label': 'サイズ揺らぎ', 'type': 'float', 'default': 0.35, 'min': 0.0, 'max': 1.0, 'step': 0.02},
         {'key': 'angle_randomness', 'label': '角度揺らぎ', 'type': 'float', 'default': 0.10, 'min': 0.0, 'max': 1.0, 'step': 0.02},
         {'key': 'arc', 'label': '広がり角度', 'type': 'float', 'default': 360.0, 'min': 20.0, 'max': 360.0, 'step': 1.0},
