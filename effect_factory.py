@@ -1776,6 +1776,7 @@ class EffectFactoryApp(tk.Tk):
                 {"id": "arc", "label": "広がり角度", "help": "集中線を出す角度範囲です。", "keys": ["arc"]},
                 {"id": "arc_rotation", "label": "向き", "help": "集中線の向きです。", "keys": ["arc_rotation"]},
                 {"id": "spiral", "label": "カーブ", "help": "線を少し曲げてひねりを加えます。", "keys": ["spiral"]},
+                {"id": "line_curve", "label": "線カーブ", "help": "カーブの向きに合わせて線自体を同じ側へぐにゃっと曲げます。", "keys": ["line_curve"]},
                 {"id": "center_x", "label": "中心X", "help": "集中点の横位置です。", "keys": ["center_x"]},
                 {"id": "center_y", "label": "中心Y", "help": "集中点の縦位置です。", "keys": ["center_y"]},
                 {"id": "wobble", "label": "中心揺れ", "help": "集中点を小さく動かします。", "keys": ["wobble"]},

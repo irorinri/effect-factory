@@ -27,32 +27,55 @@ def _symmetric_visibility_layout(target: float, min_count: int = 1):
     return base_pos, visibility
 
 
-def _curve_polygon(cx: float, cy: float, angle0: float, spiral: float, r0: float, r1: float, w0: float, w1: float):
-    radii = [r0, r0 + (r1 - r0) * 0.58, r1]
-    angles = [angle0, angle0 + spiral * 0.5, angle0 + spiral]
-    widths = [w0, w0 + (w1 - w0) * 0.6, w1]
-    points = [
-        (cx + float(np.cos(angle) * radius), cy + float(np.sin(angle) * radius))
-        for angle, radius in zip(angles, radii)
-    ]
+def _curve_polygon(
+    cx: float,
+    cy: float,
+    angle0: float,
+    spiral: float,
+    r0: float,
+    r1: float,
+    w0: float,
+    w1: float,
+    line_curve: float = 0.0,
+):
+    sample_count = 9
+    center_points = []
+    widths = []
+    curve_side_angle = angle0 + (spiral * 0.28)
+    curve_nx = -float(np.sin(curve_side_angle))
+    curve_ny = float(np.cos(curve_side_angle))
+    for sample_idx in range(sample_count):
+        t = sample_idx / float(sample_count - 1)
+        radius = r0 + (r1 - r0) * t
+        angle = angle0 + spiral * t
+        # Keep the endpoints anchored while the middle bows out strongly.
+        curve_profile = float(np.sin(np.pi * t) ** 1.35)
+        width_profile = float(np.interp(t, [0.0, 0.58, 1.0], [w0, w0 + (w1 - w0) * 0.6, w1]))
+        center_points.append(
+            (
+                cx + float(np.cos(angle) * radius) + (curve_nx * float(line_curve) * curve_profile),
+                cy + float(np.sin(angle) * radius) + (curve_ny * float(line_curve) * curve_profile),
+            )
+        )
+        widths.append(width_profile)
 
     tangents = []
-    for idx in range(len(points)):
+    for idx in range(len(center_points)):
         if idx == 0:
-            x0, y0 = points[idx]
-            x1, y1 = points[idx + 1]
-        elif idx == len(points) - 1:
-            x0, y0 = points[idx - 1]
-            x1, y1 = points[idx]
+            x0, y0 = center_points[idx]
+            x1, y1 = center_points[idx + 1]
+        elif idx == len(center_points) - 1:
+            x0, y0 = center_points[idx - 1]
+            x1, y1 = center_points[idx]
         else:
-            x0, y0 = points[idx - 1]
-            x1, y1 = points[idx + 1]
+            x0, y0 = center_points[idx - 1]
+            x1, y1 = center_points[idx + 1]
         tangents.append(float(np.arctan2(y1 - y0, x1 - x0)))
 
     left = []
     right = []
-    for point_idx, ((x, y), tangent, width) in enumerate(zip(points, tangents, widths)):
-        min_half_width = 0.0 if point_idx in (0, len(points) - 1) else 0.5
+    for point_idx, ((x, y), tangent, width) in enumerate(zip(center_points, tangents, widths)):
+        min_half_width = 0.0 if point_idx in (0, len(center_points) - 1) else 0.5
         half_width = max(min_half_width, 0.5 * float(width))
         nx = -float(np.sin(tangent))
         ny = float(np.cos(tangent))
@@ -126,11 +149,12 @@ def build_cache(w, h, frames, seed, params):
             'hole_spiral_beta': float(params.get('hole_spiral_beta', 0.0)),
             'taper': float(params.get('taper', 0.82)),
             'outer_taper': float(params.get('outer_taper', 0.0)),
-            'size_randomness': float(params.get('size_randomness', 0.35)),
-            'angle_randomness': float(params.get('angle_randomness', 0.10)),
+            'size_randomness': float(params.get('size_randomness', 0.0)),
+            'angle_randomness': float(params.get('angle_randomness', 0.0)),
             'arc': float(params.get('arc', 360.0)),
             'arc_rotation': float(params.get('arc_rotation', 0.0)),
             'spiral': float(params.get('spiral', 0.0)),
+            'line_curve': float(params.get('line_curve', 0.0)),
             'center_x': float(params.get('center_x', 0.0)),
             'center_y': float(params.get('center_y', 0.0)),
             'wobble': float(params.get('wobble', 0.0)),
@@ -171,6 +195,7 @@ def render_frame(cache, i):
     arc_deg = float(np.clip(params.get('arc', defaults['arc']), 20.0, 360.0))
     arc_rotation = np.deg2rad(float(params.get('arc_rotation', defaults['arc_rotation'])))
     spiral = np.deg2rad(float(params.get('spiral', defaults['spiral'])))
+    line_curve = float(np.clip(params.get('line_curve', defaults['line_curve']), 0.0, 80.0))
     center_x = 0.5 * (w - 1) + float(params.get('center_x', defaults['center_x'])) * 0.5 * w
     center_y = 0.5 * (h - 1) + float(params.get('center_y', defaults['center_y'])) * 0.5 * h
     wobble = float(np.clip(params.get('wobble', defaults['wobble']), 0.0, 0.45))
@@ -265,7 +290,19 @@ def render_frame(cache, i):
                 inner_radius = max(0.0, min(inner_radius, outer_radius - 4.0))
                 inner_width = max(0.5, line_width * (1.0 - taper))
             outer_width = max(0.0, line_width * (1.0 - outer_taper))
-            polygon = _curve_polygon(center_x, center_y, base_angle, local_spiral, inner_radius, outer_radius, inner_width, outer_width)
+            local_curve_direction = 0.0 if abs(local_spiral) <= 1e-6 else float(np.sign(local_spiral))
+            line_curve_offset = float(local_curve_direction * np.sin(np.deg2rad(line_curve)) * target_length * 0.62)
+            polygon = _curve_polygon(
+                center_x,
+                center_y,
+                base_angle,
+                local_spiral,
+                inner_radius,
+                outer_radius,
+                inner_width,
+                outer_width,
+                line_curve=line_curve_offset,
+            )
 
             local_flicker = 1.0
             if flicker > 0.0:
@@ -318,11 +355,12 @@ EFFECT = {
         {'key': 'hole_spiral_beta', 'label': '抜きスパイラルベータ', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 2.0, 'step': 0.02},
         {'key': 'taper', 'label': '先細り', 'type': 'float', 'default': 0.82, 'min': 0.0, 'max': 0.97, 'step': 0.01},
         {'key': 'outer_taper', 'label': '外周先細り', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 1.0, 'step': 0.01},
-        {'key': 'size_randomness', 'label': 'サイズ揺らぎ', 'type': 'float', 'default': 0.35, 'min': 0.0, 'max': 1.0, 'step': 0.02},
-        {'key': 'angle_randomness', 'label': '角度揺らぎ', 'type': 'float', 'default': 0.10, 'min': 0.0, 'max': 1.0, 'step': 0.02},
+        {'key': 'size_randomness', 'label': 'サイズ揺らぎ', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 1.0, 'step': 0.02},
+        {'key': 'angle_randomness', 'label': '角度揺らぎ', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 1.0, 'step': 0.02},
         {'key': 'arc', 'label': '広がり角度', 'type': 'float', 'default': 360.0, 'min': 20.0, 'max': 360.0, 'step': 1.0},
         {'key': 'arc_rotation', 'label': '向き', 'type': 'float', 'default': 0.0, 'min': -180.0, 'max': 180.0, 'step': 1.0},
         {'key': 'spiral', 'label': 'カーブ', 'type': 'float', 'default': 0.0, 'min': -80.0, 'max': 80.0, 'step': 1.0},
+        {'key': 'line_curve', 'label': '線カーブ', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 80.0, 'step': 1.0},
         {'key': 'center_x', 'label': '中心X', 'type': 'float', 'default': 0.0, 'min': -1.0, 'max': 1.0, 'step': 0.01},
         {'key': 'center_y', 'label': '中心Y', 'type': 'float', 'default': 0.0, 'min': -1.0, 'max': 1.0, 'step': 0.01},
         {'key': 'wobble', 'label': '中心揺れ', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 0.45, 'step': 0.01},
