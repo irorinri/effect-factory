@@ -1,3 +1,20 @@
 __pycache__/
-*.pyc
+*.py[cod]
+
+# Generated videos, previews, thumbnails, and local render state.
+_preview/
+_state.json
+*.mp4
+*_thumb.png
+output/
+exports/
+
+# Local debug captures.
+tmp_*_debug/
+
+# Local virtual environments and editor state.
+.venv/
+venv/
+.idea/
+.vscode/
 
