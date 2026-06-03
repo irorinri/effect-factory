@@ -92,11 +92,20 @@ EFFECT = {
 Existing effects such as `effects/sparkle_dust.py` and
 `effects/focus_lines.py` are the best starting points.
 
+## Documentation
+
+- `docs/PLUGIN_API.md`: plugin structure and effect authoring notes
+- `CONTRIBUTING.md`: contribution workflow and project priorities
+- `CHANGELOG.md`: public release notes
+- `SECURITY.md`: security reporting guidance
+
 ## Project Status
 
 This is an actively maintained creator-tool prototype. The current focus is
 making export behavior more reliable, keeping effects reproducible, and making
 the plugin API easier for other creators to extend.
+
+The first public OSS release is `v0.1.0`.
 
 ## Roadmap
 
