@@ -178,6 +178,8 @@ def _motion_integral_state(cache: dict, key: str = "motion_direction", default: 
         return states[cache_key]
     fps = max(1, int(cache.get("__fps__", 30)))
     frames = max(1, int(cache.get("__frames__", cache.get("frames", 1))))
+    # Loop cross-fades render a little past the loop end ("horizon").
+    frames = max(frames, int(cache.get("__horizon__", frames) or frames)) + 1
     times = [i / float(fps) for i in range(frames)]
     angles = [motion_direction_rad_at(cache, t, key=key, default=default) for t in times]
     scales = [timeline_numeric_at(cache, t, key=scale_key, default=scale_default) if scale_key else 1.0 for t in times]
@@ -204,6 +206,12 @@ def _motion_integral_at(cache: dict, time_sec: float, key: str = "motion_directi
     if not times:
         return 0.0, 0.0
     if time_sec >= times[-1]:
+        if len(times) >= 2:
+            # Extrapolate with the final velocity instead of freezing.
+            extra = float(time_sec) - times[-1]
+            step = max(1e-9, times[-1] - times[-2])
+            return (cos_acc[-1] + (cos_acc[-1] - cos_acc[-2]) / step * extra,
+                    sin_acc[-1] + (sin_acc[-1] - sin_acc[-2]) / step * extra)
         return cos_acc[-1], sin_acc[-1]
     fps = state["fps"]
     idx = min(len(times) - 1, max(0, int(np.floor(float(time_sec) * fps + 1e-9))))

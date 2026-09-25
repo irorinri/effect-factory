@@ -1,18 +1,19 @@
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 import numpy as np
 import os, sys
 
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, f32_to_pil, frame_params, max_int
+from _fxkit import BOX, Clock, bloom, finish, palette_is_mono, palette_sample, ssaa_factor
+from _fxutil import frame_params, max_int
 
 
 def _visible_fraction(target: float, index: int) -> float:
     return float(np.clip(float(target) - float(index), 0.0, 1.0))
 
 
-def _animated_time(loop: bool, duration_sec: float, u: float, t_sec: float, speed: float) -> float:
-    base_time = duration_sec * u if loop else t_sec
-    return float(base_time) * float(speed)
+def _loop_phase(clock, rate_hz: float, speed: float) -> float:
+    """Cycles elapsed for a periodic motion (snapped to whole loops in loop mode)."""
+    return clock.t * clock.rate(float(rate_hz) * float(speed)) if speed > 0 else 0.0
 
 
 def _symmetric_visibility_layout(target: float, min_count: int = 1):
@@ -84,18 +85,17 @@ def _curve_polygon(
     return [*left, *reversed(right)]
 
 
-def _cut_center(mask: Image.Image, cx: float, cy: float, radius: float, feather: float) -> Image.Image:
-    if radius <= 0.0:
-        return mask
-    hole = Image.new('L', mask.size, 0)
+def _center_hole(size, cx: float, cy: float, radius: float, feather: float, ssaa: int = 2) -> np.ndarray:
+    """Anti-aliased keep-mask (1 outside, 0 inside the centre hole)."""
+    w, h = size
+    hole = Image.new('L', (w * ssaa, h * ssaa), 0)
     draw = ImageDraw.Draw(hole)
-    draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=255)
+    draw.ellipse(((cx - radius) * ssaa, (cy - radius) * ssaa, (cx + radius) * ssaa, (cy + radius) * ssaa), fill=255)
+    if ssaa > 1:
+        hole = hole.resize((w, h), BOX)
     if feather > 0.0:
         hole = hole.filter(ImageFilter.GaussianBlur(radius=feather))
-    base = np.asarray(mask, dtype=np.float32)
-    cut = np.asarray(hole, dtype=np.float32) / 255.0
-    trimmed = np.clip(base * (1.0 - cut), 0.0, 255.0).astype(np.uint8)
-    return Image.fromarray(trimmed, mode='L')
+    return 1.0 - np.asarray(hole, dtype=np.float32) / 255.0
 
 
 def build_cache(w, h, frames, seed, params):
@@ -164,23 +164,18 @@ def build_cache(w, h, frames, seed, params):
             'blur': float(params.get('blur', 0.8)),
             'glow': float(params.get('glow', 0.6)),
             'brightness': float(params.get('brightness', 0.70)),
+            'palette': str(params.get('palette', 'white')),
         },
     }
 
 
 def render_frame(cache, i):
-    w, h, frames = cache['w'], cache['h'], cache['frames']
-    loop = bool(cache.get('__loop__', False))
-    fps = max(1, int(cache.get('__fps__', 30)))
-    n = max(1, int(cache.get('__frames__', frames)))
-    t_sec = i / float(fps)
-    u = (i / float(max(1, n - 1))) if n > 1 else 0.0
-    duration_sec = max(1.0 / fps, (n - 1) / float(fps))
+    w, h = cache['w'], cache['h']
+    clock = Clock(cache, i)
     params = frame_params(cache)
     defaults = cache['defaults']
 
     speed = max(0.0, float(params.get('speed', defaults['speed'])))
-    anim_time = _animated_time(loop, duration_sec, u, t_sec, speed)
     requested_count = min(float(cache['max_count']), max(0.0, float(params.get('count', defaults['count']))))
     base_length = max(0.0, cache['radius'] * float(params.get('length', defaults['length'])))
     base_width = max(1.0, float(params.get('width', defaults['width'])))
@@ -207,12 +202,12 @@ def render_frame(cache, i):
 
     if wobble > 0.0:
         wobble_radius = wobble * min(w, h) * 0.34
-        center_x += wobble_radius * float(np.cos((anim_time * 2.0 * np.pi * 0.23) + cache['wobble_phase']))
-        center_y += wobble_radius * 0.8 * float(np.sin((anim_time * 2.0 * np.pi * 0.31) + cache['wobble_phase'] * 0.83))
+        center_x += wobble_radius * float(np.cos((_loop_phase(clock, 0.23, speed) * 2.0 * np.pi) + cache['wobble_phase']))
+        center_y += wobble_radius * 0.8 * float(np.sin((_loop_phase(clock, 0.31, speed) * 2.0 * np.pi) + cache['wobble_phase'] * 0.83))
 
     full_burst = arc_deg >= 359.5
     arc_rad = np.deg2rad(arc_deg)
-    base_rotation = arc_rotation + rotation_speed * anim_time
+    base_rotation = arc_rotation + rotation_speed * clock.t * speed
     symmetry_locked = hole_spiral_branches > 1 and (hole_radius > 0.0 or hole_spiral > 0.0)
     min_layout_count = hole_spiral_branches if symmetry_locked else 1
     line_count = max(requested_count, float(min_layout_count)) if symmetry_locked else requested_count
@@ -229,14 +224,32 @@ def render_frame(cache, i):
     slot_rad = ((2.0 * np.pi) if full_burst else arc_rad) / float(max(1, slot_count))
     base_pos_start = float(base_positions[0]) if len(base_positions) else 0.0
 
-    mask = Image.new('L', (w, h), 0)
-    draw = ImageDraw.Draw(mask)
+    # Draw supersampled so line edges are anti-aliased.
+    ssaa = ssaa_factor(w, h)
+    palette = str(params.get('palette', defaults.get('palette', 'white')))
+    mono = palette_is_mono(palette)
+    # Single-colour palettes draw a cheap greyscale mask that is tinted later.
+    canvas = Image.new('L' if mono else 'RGB', (w * ssaa, h * ssaa), 0)
+    draw = ImageDraw.Draw(canvas)
+    tint = palette_sample(palette, 0.0)
+
+    def fill_for(alpha_value: float, pos: float):
+        a = float(np.clip(alpha_value, 0.0, 255.0))
+        if mono:
+            return int(a)
+        # Mirror the gradient around the circle so there is no colour seam.
+        col = palette_sample(palette, 0.5 - 0.5 * np.cos(2.0 * np.pi * float(pos)))
+        return (int(col[0] * a), int(col[1] * a), int(col[2] * a))
+
+    def scaled(poly):
+        return [(x * ssaa, y * ssaa) for x, y in poly]
 
     if base_length <= 1e-6 and full_burst and hole_radius > 0.0:
         ring_outer = hole_radius + max(1.0, base_width)
         draw.ellipse(
-            (center_x - ring_outer, center_y - ring_outer, center_x + ring_outer, center_y + ring_outer),
-            fill=255,
+            ((center_x - ring_outer) * ssaa, (center_y - ring_outer) * ssaa,
+             (center_x + ring_outer) * ssaa, (center_y + ring_outer) * ssaa),
+            fill=fill_for(255.0, 0.0),
         )
     else:
         for idx, base_pos in enumerate(base_positions):
@@ -306,70 +319,64 @@ def render_frame(cache, i):
 
             local_flicker = 1.0
             if flicker > 0.0:
-                osc = float(
-                    np.sin(
-                        (2.0 * np.pi * (0.9 + 0.7 * cache['tempo_noise'][idx]) * anim_time)
-                        + cache['phase_noise'][idx]
-                    )
-                )
+                phase = _loop_phase(clock, 0.9 + 0.7 * float(cache['tempo_noise'][idx]), speed)
+                osc = float(np.sin((2.0 * np.pi * phase) + cache['phase_noise'][idx]))
                 local_flicker = (1.0 - 0.55 * flicker) + flicker * (0.5 + 0.5 * osc)
 
             alpha = 255.0 * vis * float(cache['alpha_noise'][idx]) * global_alpha_scale * local_flicker
-            fill = int(np.clip(alpha, 0.0, 255.0))
-            if fill > 0:
-                draw.polygon(polygon, fill=fill)
+            if alpha >= 0.5:
+                draw.polygon(scaled(polygon), fill=fill_for(alpha, base_pos))
 
+    if ssaa > 1:
+        canvas = canvas.resize((w, h), BOX)
     if blur > 0.0:
-        mask = mask.filter(ImageFilter.GaussianBlur(radius=blur))
+        canvas = canvas.filter(ImageFilter.GaussianBlur(radius=blur))
+    buf = np.asarray(canvas, dtype=np.float32) * (1.0 / 255.0)
+    if mono:
+        buf = buf[:, :, None] * tint
 
     if hole_radius > 0.0:
-        mask = _cut_center(mask, center_x, center_y, hole_radius, 0.0)
-    else:
-        cut_radius = max(0.0, hole_radius - (base_width * (0.25 + 0.15 * size_randomness)))
-        if cut_radius > 0.0:
-            mask = _cut_center(mask, center_x, center_y, cut_radius, max(0.8, blur * 1.2 + base_width * 0.18))
-
-    mask_arr = np.asarray(mask, dtype=np.float32) / 255.0
-    out = f32_to_pil(np.stack([mask_arr, mask_arr, mask_arr], axis=-1))
+        buf = buf * _center_hole((w, h), center_x, center_y, hole_radius, 0.0, ssaa)[:, :, None]
 
     if glow > 0.0:
         glow_radius = max(1.0, base_width * 0.45 + blur * 1.5)
-        out = add_glow(out, radius=glow_radius, strength=glow)
+        buf = bloom(buf, glow * 0.8, radius=float(np.clip(glow_radius / 8.0, 0.3, 2.0)))
 
-    if brightness != 1.0:
-        out = ImageEnhance.Brightness(out).enhance(brightness)
-
-    return out
+    return finish(buf, exposure=max(0.0, brightness), knee=1.0)
 
 
 EFFECT = {
     'id': 'focus_lines',
     'name': 'Focus Lines',
+    'category': 'Graphic',
+    'description': 'Manga-style speed and focus lines with spiral gaps, arcs and colour gradients.',
+    'seamless': lambda params: abs(float(params.get('rotation_speed', 0.0) or 0.0)) < 1e-6,
     'params': [
-        {'key': 'count', 'label': 'Line Count', 'type': 'int', 'default': 160, 'min': 12, 'max': 420, 'step': 1},
-        {'key': 'length', 'label': 'Outer Reach', 'type': 'float', 'default': 1.15, 'min': 0.0, 'max': 2.4, 'step': 0.02},
-        {'key': 'width', 'label': 'Width', 'type': 'float', 'default': 8.0, 'min': 1.0, 'max': 48.0, 'step': 0.5},
-        {'key': 'hole_radius', 'label': 'Center Gap', 'type': 'float', 'default': 64.0, 'min': 0.0, 'max': 420.0, 'step': 1.0},
-        {'key': 'hole_spiral', 'label': 'Gap Spiral', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 1.0, 'step': 0.02},
-        {'key': 'hole_spiral_branches', 'label': 'Gap Spiral Branches', 'type': 'int', 'default': 1, 'min': 1, 'max': 30, 'step': 1},
-        {'key': 'hole_spiral_beta', 'label': 'Gap Spiral Beta', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 2.0, 'step': 0.02},
-        {'key': 'taper', 'label': 'Tip Taper', 'type': 'float', 'default': 0.82, 'min': 0.0, 'max': 0.97, 'step': 0.01},
-        {'key': 'outer_taper', 'label': 'Outer Taper', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 1.0, 'step': 0.01},
-        {'key': 'size_randomness', 'label': 'Size Variation', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 1.0, 'step': 0.02},
-        {'key': 'angle_randomness', 'label': 'Angle Variation', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 1.0, 'step': 0.02},
-        {'key': 'arc', 'label': 'Arc', 'type': 'float', 'default': 360.0, 'min': 20.0, 'max': 360.0, 'step': 1.0},
-        {'key': 'arc_rotation', 'label': 'Direction', 'type': 'float', 'default': 0.0, 'min': -180.0, 'max': 180.0, 'step': 1.0},
-        {'key': 'spiral', 'label': 'Spiral', 'type': 'float', 'default': 0.0, 'min': -80.0, 'max': 80.0, 'step': 1.0},
-        {'key': 'line_curve', 'label': 'Line Curve', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 80.0, 'step': 1.0},
-        {'key': 'center_x', 'label': 'Center X', 'type': 'float', 'default': 0.0, 'min': -1.0, 'max': 1.0, 'step': 0.01},
-        {'key': 'center_y', 'label': 'Center Y', 'type': 'float', 'default': 0.0, 'min': -1.0, 'max': 1.0, 'step': 0.01},
-        {'key': 'wobble', 'label': 'Center Wobble', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 0.45, 'step': 0.01},
-        {'key': 'rotation_speed', 'label': 'Rotation Speed', 'type': 'float', 'default': 0.0, 'min': -180.0, 'max': 180.0, 'step': 1.0},
-        {'key': 'flicker', 'label': 'Flicker', 'type': 'float', 'default': 0.12, 'min': 0.0, 'max': 1.0, 'step': 0.02},
-        {'key': 'speed', 'label': 'Speed', 'type': 'float', 'default': 1.0, 'min': 0.0, 'max': 4.0, 'step': 0.05},
-        {'key': 'blur', 'label': 'Blur', 'type': 'float', 'default': 0.8, 'min': 0.0, 'max': 8.0, 'step': 0.1},
-        {'key': 'glow', 'label': 'Glow', 'type': 'float', 'default': 0.6, 'min': 0.0, 'max': 2.0, 'step': 0.05},
-        {'key': 'brightness', 'label': 'Brightness', 'type': 'float', 'default': 0.70, 'min': 0.2, 'max': 2.2, 'step': 0.05},
+        {'key': 'count', 'label': 'Line Count', 'type': 'int', 'default': 160, 'min': 12, 'max': 420, 'step': 1, 'group': 'shape', 'pretty': [90, 260], 'help': 'Number of focus lines.'},
+        {'key': 'length', 'label': 'Outer Reach', 'type': 'float', 'default': 1.15, 'min': 0.0, 'max': 2.4, 'step': 0.02, 'group': 'shape', 'pretty': [0.8, 1.5], 'help': 'How far the lines extend outward.'},
+        {'key': 'width', 'label': 'Width', 'type': 'float', 'default': 8.0, 'min': 1.0, 'max': 48.0, 'step': 0.5, 'group': 'shape', 'pretty': [4.0, 16.0], 'help': 'Outer width of each line.'},
+        {'key': 'hole_radius', 'label': 'Center Gap', 'type': 'float', 'default': 64.0, 'min': 0.0, 'max': 420.0, 'step': 1.0, 'group': 'shape', 'pretty': [30.0, 200.0], 'help': 'Size of the empty centre area.'},
+        {'key': 'taper', 'label': 'Tip Taper', 'type': 'float', 'default': 0.82, 'min': 0.0, 'max': 0.97, 'step': 0.01, 'group': 'shape', 'pretty': [0.6, 0.95], 'help': 'Higher values give sharper inner tips.'},
+        {'key': 'outer_taper', 'label': 'Outer Taper', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 1.0, 'step': 0.01, 'group': 'shape', 'help': 'Sharpens the outer ends of the lines.'},
+        {'key': 'size_randomness', 'label': 'Size Variation', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 1.0, 'step': 0.02, 'group': 'shape', 'pretty': [0.1, 0.6], 'help': 'Variation in line length and width.'},
+        {'key': 'angle_randomness', 'label': 'Angle Variation', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 1.0, 'step': 0.02, 'group': 'shape', 'pretty': [0.0, 0.6], 'help': 'Randomness in line placement.'},
+        {'key': 'arc', 'label': 'Arc', 'type': 'float', 'default': 360.0, 'min': 20.0, 'max': 360.0, 'step': 1.0, 'group': 'shape', 'help': 'Angle range covered by the lines.'},
+        {'key': 'arc_rotation', 'label': 'Arc Direction', 'type': 'float', 'default': 0.0, 'min': -180.0, 'max': 180.0, 'step': 1.0, 'group': 'shape', 'unit': 'deg', 'help': 'Direction the arc points.'},
+        {'key': 'center_x', 'label': 'Center X', 'type': 'float', 'default': 0.0, 'min': -1.0, 'max': 1.0, 'step': 0.01, 'group': 'shape', 'help': 'Horizontal position of the focal point.'},
+        {'key': 'center_y', 'label': 'Center Y', 'type': 'float', 'default': 0.0, 'min': -1.0, 'max': 1.0, 'step': 0.01, 'group': 'shape', 'help': 'Vertical position of the focal point.'},
+        {'key': 'hole_spiral', 'label': 'Gap Spiral', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 1.0, 'step': 0.02, 'group': 'shape', 'advanced': True, 'help': 'Offsets inner endpoints outward along a spiral.'},
+        {'key': 'hole_spiral_branches', 'label': 'Gap Branches', 'type': 'int', 'default': 1, 'min': 1, 'max': 30, 'step': 1, 'group': 'shape', 'advanced': True, 'help': 'Number of inner spiral branches.'},
+        {'key': 'hole_spiral_beta', 'label': 'Gap Beta', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 2.0, 'step': 0.02, 'group': 'shape', 'advanced': True, 'help': 'Shape of the inner spiral curve.'},
+        {'key': 'spiral', 'label': 'Spiral', 'type': 'float', 'default': 0.0, 'min': -80.0, 'max': 80.0, 'step': 1.0, 'group': 'motion', 'help': 'Adds a curved twist to the lines.'},
+        {'key': 'line_curve', 'label': 'Line Curve', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 80.0, 'step': 1.0, 'group': 'motion', 'help': 'Bends each line along the spiral direction.'},
+        {'key': 'wobble', 'label': 'Center Wobble', 'type': 'float', 'default': 0.0, 'min': 0.0, 'max': 0.45, 'step': 0.01, 'group': 'motion', 'help': 'Small motion of the focal point.'},
+        {'key': 'rotation_speed', 'label': 'Rotation', 'type': 'float', 'default': 0.0, 'min': -180.0, 'max': 180.0, 'step': 1.0, 'group': 'motion', 'help': 'Rotates the whole field (degrees per second).'},
+        {'key': 'flicker', 'label': 'Flicker', 'type': 'float', 'default': 0.12, 'min': 0.0, 'max': 1.0, 'step': 0.02, 'group': 'motion', 'pretty': [0.05, 0.5], 'help': 'Brightness variation between lines.'},
+        {'key': 'speed', 'label': 'Speed', 'type': 'float', 'default': 1.0, 'min': 0.0, 'max': 4.0, 'step': 0.05, 'group': 'motion', 'pretty': [0.6, 2.0], 'help': 'Overall animation speed.'},
+        {'key': 'palette', 'label': 'Palette', 'type': 'palette', 'default': 'white', 'group': 'color', 'help': 'Multi-colour palettes sweep around the circle.'},
+        {'key': 'blur', 'label': 'Blur', 'type': 'float', 'default': 0.8, 'min': 0.0, 'max': 8.0, 'step': 0.1, 'group': 'finish', 'help': 'Softens line edges.'},
+        {'key': 'glow', 'label': 'Glow', 'type': 'float', 'default': 0.6, 'min': 0.0, 'max': 2.0, 'step': 0.05, 'group': 'finish', 'help': 'Light bloom around the lines.'},
+        {'key': 'brightness', 'label': 'Brightness', 'type': 'float', 'default': 0.70, 'min': 0.2, 'max': 2.2, 'step': 0.05, 'group': 'finish', 'help': 'Overall brightness.'},
     ],
     'build_cache': build_cache,
     'render_frame': render_frame,

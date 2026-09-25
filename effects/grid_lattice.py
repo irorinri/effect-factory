@@ -3,6 +3,7 @@ import numpy as np
 import os, sys
 
 sys.path.append(os.path.dirname(__file__))
+from _fxkit import BICUBIC, BOX, Clock, bloom, finish, palette_is_mono, palette_sample, ssaa_factor
 from _fxutil import frame_params, min_numeric
 
 GRID_SUPERSAMPLE = 2
@@ -104,19 +105,42 @@ def build_cache(w, h, frames, seed, params):
             "horizontal_speed": float(params.get("horizontal_speed", -0.4)),
             "line_fade": float(params.get("line_fade", 0.5)),
             "blur": float(params.get("blur", 1.2)),
+            "palette": str(params.get("palette", "white")),
+            "glow": float(params.get("glow", 0.25)),
+            "perspective": float(params.get("perspective", 0.0)),
         },
     }
 
 
+def _perspective_coeffs(src_quad, dst_quad):
+    """Coefficients for Image.transform(PERSPECTIVE) mapping dst (output) -> src (input)."""
+    rows, rhs = [], []
+    for (xo, yo), (xi, yi) in zip(dst_quad, src_quad):
+        rows.append([xo, yo, 1, 0, 0, 0, -xi * xo, -xi * yo])
+        rows.append([0, 0, 0, xo, yo, 1, -yi * xo, -yi * yo])
+        rhs.extend([xi, yi])
+    return np.linalg.solve(np.array(rows, dtype=np.float64), np.array(rhs, dtype=np.float64)).tolist()
+
+
+def _floor_warp(img, amount):
+    """Lay the flat grid down as a receding floor (synthwave style)."""
+    w, h = img.size
+    horizon = h * (0.48 - 0.1 * amount)
+    near = 0.5 + 1.6 * amount
+    far = 0.5 - 0.44 * amount
+    cx = w * 0.5
+    src = [(0, 0), (w, 0), (w, h), (0, h)]
+    dst = [(cx - w * far, horizon), (cx + w * far, horizon), (cx + w * near, h), (cx - w * near, h)]
+    out = img.transform((w, h), Image.PERSPECTIVE, _perspective_coeffs(src, dst), resample=BICUBIC)
+    depth = np.clip((np.arange(h, dtype=np.float32) - horizon) / max(1.0, h - horizon), 0.0, 1.0) ** 0.9
+    arr = np.asarray(out, dtype=np.float32) * depth[:, None]
+    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "L")
+
+
 def render_frame(cache, i):
-    w, h, frames = cache["w"], cache["h"], cache["frames"]
-    loop = bool(cache.get("__loop__", False))
-    fps = max(1, int(cache.get("__fps__", 30)))
-    n = max(1, int(cache.get("__frames__", frames)))
-    t_sec = i / float(fps)
-    u = (i / float(max(1, n - 1))) if n > 1 else 0.0
-    duration_sec = max(1.0 / fps, (n - 1) / float(fps))
-    phase_sec = duration_sec * u if loop else t_sec
+    w, h = cache["w"], cache["h"]
+    clock = Clock(cache, i)
+    phase_sec = clock.t
     params = frame_params(cache)
     defaults = cache["defaults"]
 
@@ -137,14 +161,16 @@ def render_frame(cache, i):
     vertical_angle = np.deg2rad(grid_rotation + 90.0 + float(params.get("vertical_angle", defaults["vertical_angle"])))
     horizontal_angle = np.deg2rad(grid_rotation + float(params.get("horizontal_angle", defaults["horizontal_angle"])))
 
+    # Speeds are in grid cells per second; snapping them to whole cells per
+    # loop makes the scroll repeat seamlessly.
     vertical_shift = _wrapped_shift(
         spacing,
-        float(params.get("vertical_speed", defaults["vertical_speed"])),
+        clock.rate(float(params.get("vertical_speed", defaults["vertical_speed"]))),
         phase_sec,
     )
     horizontal_shift = _wrapped_shift(
         spacing,
-        float(params.get("horizontal_speed", defaults["horizontal_speed"])),
+        clock.rate(float(params.get("horizontal_speed", defaults["horizontal_speed"]))),
         phase_sec,
     )
 
@@ -157,11 +183,17 @@ def render_frame(cache, i):
     vertical_mask = np.abs(vertical_offsets) <= (cache["line_extent"] + spacing + vertical_widths)
     horizontal_mask = np.abs(horizontal_offsets) <= (cache["line_extent"] + spacing + horizontal_widths)
 
-    ssaa = max(1, int(GRID_SUPERSAMPLE))
+    ssaa = max(1, min(int(GRID_SUPERSAMPLE), ssaa_factor(w, h)))
     render_w = max(1, int(w * ssaa))
     render_h = max(1, int(h * ssaa))
-    img = Image.new("L", (render_w, render_h), 0)
-    draw = ImageDraw.Draw(img)
+    palette = str(params.get("palette", defaults.get("palette", "white")))
+    mono = palette_is_mono(palette)
+    # Colour palettes give each line family its own mask/colour; crossings add up.
+    masks = [Image.new("L", (render_w, render_h), 0) for _ in range(1 if mono else 3)]
+    draws = [ImageDraw.Draw(m) for m in masks]
+    draw = draws[0]
+    draw_h = draws[-1] if mono else draws[1]
+    draw_d = draws[-1] if mono else draws[2]
     cx = 0.5 * (render_w - 1)
     cy = 0.5 * (render_h - 1)
 
@@ -176,7 +208,7 @@ def render_frame(cache, i):
         coord_scale=float(ssaa),
     )
     _draw_line_family(
-        draw,
+        draw_h,
         cx,
         cy,
         horizontal_offsets[horizontal_mask],
@@ -208,7 +240,7 @@ def render_frame(cache, i):
             if diag_offsets_a is not None:
                 diag_mask_a = np.abs(diag_offsets_a) <= (cache["line_extent"] + spacing * (p + q) + family_width)
                 _draw_line_family(
-                    draw,
+                    draw_d,
                     cx,
                     cy,
                     diag_offsets_a[diag_mask_a],
@@ -228,7 +260,7 @@ def render_frame(cache, i):
                 if diag_offsets_b is not None:
                     diag_mask_b = np.abs(diag_offsets_b) <= (cache["line_extent"] + spacing * (p + q) + family_width)
                     _draw_line_family(
-                        draw,
+                        draw_d,
                         cx,
                         cy,
                         diag_offsets_b[diag_mask_b],
@@ -239,37 +271,50 @@ def render_frame(cache, i):
                     )
 
     blur = max(0.0, float(params.get("blur", defaults["blur"])))
-    if blur > 0:
-        img = img.filter(ImageFilter.GaussianBlur(radius=blur * ssaa))
+    perspective = float(np.clip(params.get("perspective", defaults.get("perspective", 0.0)), 0.0, 1.0))
+    colors = [palette_sample(palette, 0.0)] if mono else [palette_sample(palette, t) for t in (0.0, 1.0, 0.5)]
+    buf = np.zeros((h, w, 3), dtype=np.float32)
+    for mask, color in zip(masks, colors):
+        if mask.getbbox() is None:
+            continue
+        if perspective > 0.01:
+            mask = _floor_warp(mask, perspective)
+        if ssaa > 1:
+            mask = mask.resize((w, h), BOX)
+        if blur > 0:
+            mask = mask.filter(ImageFilter.GaussianBlur(radius=blur))
+        buf += (np.asarray(mask, dtype=np.float32) * (line_intensity / 255.0))[:, :, None] * color
 
-    if ssaa > 1:
-        img = img.resize((w, h), Image.Resampling.BOX)
-
-    if line_intensity < 1.0:
-        lut = [int(round(v * line_intensity)) for v in range(256)]
-        img = img.point(lut)
-
-    return Image.merge("RGB", (img, img, img))
+    glow = max(0.0, float(params.get("glow", defaults.get("glow", 0.0))))
+    if glow > 0.0:
+        buf = bloom(buf, glow, radius=0.8)
+    return finish(buf, knee=1.0 if mono and glow <= 0.0 else 0.85)
 
 
 EFFECT = {
     "id": "grid_lattice",
     "name": "Grid Lattice Lines",
+    "category": "Graphic",
+    "description": "Scrolling line grids with diagonals, neon colours and a synthwave floor mode.",
+    "seamless": True,
     "params": [
-        {"key": "vertical_width", "label": "Vertical Line Width", "type": "float", "default": 14.0, "min": 1.0, "max": 120.0, "step": 1.0},
-        {"key": "vertical_width_randomness", "label": "Vertical Width Random", "type": "float", "default": 0.35, "min": 0.0, "max": 1.0, "step": 0.02},
-        {"key": "horizontal_width", "label": "Horizontal Line Width", "type": "float", "default": 14.0, "min": 1.0, "max": 120.0, "step": 1.0},
-        {"key": "horizontal_width_randomness", "label": "Horizontal Width Random", "type": "float", "default": 0.35, "min": 0.0, "max": 1.0, "step": 0.02},
-        {"key": "spacing", "label": "Line Spacing", "type": "float", "default": 90.0, "min": 2.0, "max": 320.0, "step": 1.0},
-        {"key": "diagonal_count", "label": "Diagonal Direction Count", "type": "int", "default": 0, "min": 0, "max": 2, "step": 1},
-        {"key": "diagonal_span", "label": "Diagonal Span", "type": "int", "default": 1, "min": 1, "max": 6, "step": 1},
-        {"key": "grid_rotation", "label": "Grid Rotation", "type": "float", "default": 0.0, "min": -180.0, "max": 180.0, "step": 1.0},
-        {"key": "vertical_angle", "label": "Vertical Line Angle", "type": "float", "default": 0.0, "min": -90.0, "max": 90.0, "step": 1.0},
-        {"key": "horizontal_angle", "label": "Horizontal Line Angle", "type": "float", "default": 0.0, "min": -90.0, "max": 90.0, "step": 1.0},
-        {"key": "vertical_speed", "label": "Vertical Move Speed", "type": "float", "default": 0.4, "min": -4.0, "max": 4.0, "step": 0.05},
-        {"key": "horizontal_speed", "label": "Horizontal Move Speed", "type": "float", "default": -0.4, "min": -4.0, "max": 4.0, "step": 0.05},
-        {"key": "line_fade", "label": "Line Fade", "type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05},
-        {"key": "blur", "label": "Blur", "type": "float", "default": 1.2, "min": 0.0, "max": 8.0, "step": 0.1},
+        {"key": "spacing", "label": "Spacing", "type": "float", "default": 90.0, "min": 2.0, "max": 320.0, "step": 1.0, "group": "shape", "pretty": [50.0, 160.0], "help": "Distance between grid lines."},
+        {"key": "vertical_width", "label": "Vertical Width", "type": "float", "default": 14.0, "min": 1.0, "max": 120.0, "step": 1.0, "group": "shape", "pretty": [2.0, 20.0], "help": "Width of the vertical lines."},
+        {"key": "horizontal_width", "label": "Horizontal Width", "type": "float", "default": 14.0, "min": 1.0, "max": 120.0, "step": 1.0, "group": "shape", "pretty": [2.0, 20.0], "help": "Width of the horizontal lines."},
+        {"key": "vertical_width_randomness", "label": "V Width Random", "type": "float", "default": 0.35, "min": 0.0, "max": 1.0, "step": 0.02, "group": "shape", "advanced": True},
+        {"key": "horizontal_width_randomness", "label": "H Width Random", "type": "float", "default": 0.35, "min": 0.0, "max": 1.0, "step": 0.02, "group": "shape", "advanced": True},
+        {"key": "diagonal_count", "label": "Diagonals", "type": "int", "default": 0, "min": 0, "max": 2, "step": 1, "group": "shape", "help": "Adds 0 to 2 diagonal directions."},
+        {"key": "diagonal_span", "label": "Diagonal Span", "type": "int", "default": 1, "min": 1, "max": 6, "step": 1, "group": "shape", "advanced": True, "help": "How many cells diagonal links skip."},
+        {"key": "perspective", "label": "Floor Perspective", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.02, "group": "shape", "help": "Lays the grid down as a receding floor (synthwave)."},
+        {"key": "grid_rotation", "label": "Rotation", "type": "float", "default": 0.0, "min": -180.0, "max": 180.0, "step": 1.0, "group": "shape", "unit": "deg"},
+        {"key": "vertical_angle", "label": "Vertical Angle", "type": "float", "default": 0.0, "min": -90.0, "max": 90.0, "step": 1.0, "group": "shape", "advanced": True},
+        {"key": "horizontal_angle", "label": "Horizontal Angle", "type": "float", "default": 0.0, "min": -90.0, "max": 90.0, "step": 1.0, "group": "shape", "advanced": True},
+        {"key": "vertical_speed", "label": "Vertical Scroll", "type": "float", "default": 0.4, "min": -4.0, "max": 4.0, "step": 0.05, "group": "motion", "help": "Cells per second (snapped to whole cells per loop)."},
+        {"key": "horizontal_speed", "label": "Horizontal Scroll", "type": "float", "default": -0.4, "min": -4.0, "max": 4.0, "step": 0.05, "group": "motion", "help": "Cells per second (snapped to whole cells per loop)."},
+        {"key": "palette", "label": "Palette", "type": "palette", "default": "white", "group": "color", "help": "Colour palettes tint each line family differently."},
+        {"key": "line_fade", "label": "Line Fade", "type": "float", "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05, "group": "color", "help": "Makes the lines fainter."},
+        {"key": "blur", "label": "Blur", "type": "float", "default": 1.2, "min": 0.0, "max": 8.0, "step": 0.1, "group": "finish"},
+        {"key": "glow", "label": "Glow", "type": "float", "default": 0.25, "min": 0.0, "max": 3.0, "step": 0.05, "group": "finish"},
     ],
     "build_cache": build_cache,
     "render_frame": render_frame,

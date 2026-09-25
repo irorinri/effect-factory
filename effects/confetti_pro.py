@@ -1,204 +1,248 @@
-from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
+import math
+import os
+import sys
+
 import numpy as np
-import os, sys
+from PIL import Image, ImageDraw, ImageFilter
+
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, film_grain, frame_params, integrated_motion_offset, max_int, max_numeric, motion_direction_rad_at, rotate_vector
+from _fxkit import BICUBIC, BOX, Clock, Emitter, add_grain, bloom, finish, palette_sample, ssaa_factor, to_buffer
+from _fxutil import frame_params, max_int, max_numeric
+
+SHAPES = ("mixed", "paper", "circles", "ribbons", "stars", "hearts", "petals")
 
 
-def _draw_piece(draw, cx, cy, size, aspect, ang_deg, shade, alpha, shape):
-    w = size * aspect
-    h = size
-    ang = np.deg2rad(ang_deg)
-    ca, sa = np.cos(ang), np.sin(ang)
+def _poly_circle(n=18):
+    a = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+    return np.stack([np.cos(a) * 0.5, np.sin(a) * 0.5], axis=1)
 
-    def rot(x, y):
-        return (cx + x * ca - y * sa, cy + x * sa + y * ca)
 
-    col = (shade, shade, shade, int(np.clip(alpha, 0, 255)))
-    if shape == 0:
-        hw, hh = w * 0.5, h * 0.5
-        pts = [rot(-hw, -hh), rot(hw, -hh), rot(hw, hh), rot(-hw, hh)]
-        draw.polygon(pts, fill=col)
-    else:
-        hw, hh = w * 0.55, h * 0.65
-        pts = [rot(0, -hh), rot(hw, hh), rot(-hw, hh)]
-        draw.polygon(pts, fill=col)
+def _poly_star():
+    pts = []
+    for k in range(10):
+        a = -math.pi / 2 + k * math.pi / 5
+        r = 0.5 if k % 2 == 0 else 0.22
+        pts.append((math.cos(a) * r, math.sin(a) * r))
+    return np.array(pts)
+
+
+def _poly_heart():
+    t = np.linspace(0.0, 2.0 * np.pi, 26, endpoint=False)
+    x = 16 * np.sin(t) ** 3
+    y = -(13 * np.cos(t) - 5 * np.cos(2 * t) - 2 * np.cos(3 * t) - np.cos(4 * t))
+    pts = np.stack([x, y], axis=1) / 34.0
+    return pts - pts.mean(axis=0)
+
+
+def _poly_petal():
+    t = np.linspace(0.0, 2.0 * np.pi, 24, endpoint=False)
+    x = 0.34 * np.sin(t) * (0.55 + 0.45 * (1 - np.cos(t)) / 2) * 1.35
+    y = -0.5 * np.cos(t)
+    pts = np.stack([x, y], axis=1)
+    pts[0, 1] += 0.14  # little notch at the tip, like a cherry blossom petal
+    return pts
+
+
+POLYS = {
+    "paper": np.array([(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]),
+    "circles": _poly_circle(),
+    "ribbons": np.array([(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]),
+    "stars": _poly_star(),
+    "hearts": _poly_heart(),
+    "petals": _poly_petal(),
+}
+ASPECT = {"paper": (0.45, 0.85), "circles": (1.0, 1.0), "ribbons": (0.16, 0.24),
+          "stars": (1.0, 1.0), "hearts": (1.0, 1.0), "petals": (0.8, 1.0)}
+MIXED = ("paper", "paper", "paper", "circles", "ribbons")
+
+DEFAULTS = {
+    "density": 1.0, "layers": 3, "size": 1.0, "shape": "mixed", "palette": "rainbow",
+    "speed": 1.0, "motion_direction": 0.0, "spin": 1.0, "sway": 0.5, "shimmer": 0.6,
+    "mblur_samples": 1, "blur_far": 1.6, "blur_mid": 0.6, "blur_near": 0.0,
+    "glow": 0.0, "brightness": 1.0, "grain": 0.0,
+}
 
 
 def build_cache(w, h, frames, seed, params):
-    rng = np.random.default_rng(int(seed) & 0x7fffffff)
+    rng = np.random.default_rng(int(seed) & 0x7FFFFFFF)
+    fps = int(params.get("__fps__", 30))
+    n_frames = int(params.get("__frames__", frames))
     loop = bool(params.get("__loop__", False))
-    max_density = max(0.2, max_numeric(params, "density", 1.0))
-    max_layers = max(1, max_int(params, "layers", 3))
-    base_n = int(260 * max_density)
-
-    weights = [0.6 + 0.3 * li for li in range(max_layers)]
-    total_weight = max(1e-6, sum(weights))
-    layer_counts = [max(10, int(base_n * weight / total_weight * max_layers)) for weight in weights]
-
-    pieces = []
+    max_density = max(0.1, max_numeric(params, "density", 1.0))
+    max_layers = int(np.clip(max_int(params, "layers", 3), 1, 5))
+    unit = min(w, h) / 1080.0
+    size_scale = max(0.2, float(params.get("size", 1.0)))
+    speed = max(0.02, float(params.get("speed", 1.0)))
+    per_layer = [int(round(110 * max_density * (1.3 - 0.15 * li))) for li in range(max_layers)]
+    layer = np.concatenate([np.full(n, li) for li, n in enumerate(per_layer)]).astype(np.int64)
+    count = len(layer)
+    # depth 0 = far, 1 = near
+    depth = np.where(max_layers > 1, layer / max(1, max_layers - 1), 1.0).astype(np.float32)
+    size = rng.uniform(15.0, 26.0, count) * (0.45 + 0.75 * depth) * size_scale * unit
+    fall = rng.uniform(150.0, 230.0, count) * (0.55 + 0.6 * depth) * speed * unit
+    margin = 40.0 * unit * size_scale
+    travel = float(math.hypot(w, h)) + 2.0 * margin
+    lifetimes = travel / fall
+    emitter = Emitter(count, int(seed) + 5, fps, n_frames, loop, lifetimes=lifetimes)
+    order_in_layer = np.zeros(count, dtype=np.float32)
     for li in range(max_layers):
-        depth_ratio = 0.0 if max_layers <= 1 else (li / float(max_layers - 1))
-        z = 1.0 - depth_ratio
-        if depth_ratio <= 0.33:
-            bucket = 0
-        elif depth_ratio >= 0.66:
-            bucket = 2
-        else:
-            bucket = 1
-        for idx in range(layer_counts[li]):
-            pieces.append({
-                "layer": li,
-                "layer_index": idx,
-                "bucket": bucket,
-                "depth_ratio": depth_ratio,
-                "x0": float(rng.uniform(0, w)),
-                "y0": float(rng.uniform(0, h)),
-                "kx": float(rng.uniform(-2.0, 2.0)),
-                "ky": float(rng.uniform(1.0, 4.0 + li)),
-                "size": float(rng.uniform(6.0, 20.0) * (0.45 + 0.95 * z)),
-                "aspect": float(rng.uniform(0.5, 2.2)),
-                "angle0": float(rng.uniform(0, 360)),
-                "rot": float(rng.uniform(-3.0, 3.0)),
-                "ff": float(rng.uniform(1.0, 5.0)),
-                "fp": float(rng.uniform(0, 2 * np.pi)),
-                "shade": int(rng.integers(170, 255)),
-                "alpha": float(rng.integers(160, 255) * (0.55 + 0.45 * z)),
-                "shape": int(rng.integers(0, 2)),
-            })
-
+        idx = np.nonzero(layer == li)[0]
+        order_in_layer[idx] = rng.permutation(len(idx))
+    life = emitter.life
     return {
-        "w": w,
-        "h": h,
-        "frames": frames,
-        "seed": int(seed),
-        "__loop__": loop,
-        "__fps__": int(params.get("__fps__", 30)),
-        "__frames__": int(params.get("__frames__", frames)),
-        "pieces": pieces,
-        "layer_counts": layer_counts,
-        "max_layers": max_layers,
-        "max_density": max_density,
-        "defaults": {
-            "density": float(params.get("density", 1.0)),
-            "layers": float(params.get("layers", max_layers)),
-            "blur_far": float(params.get("blur_far", 1.6)),
-            "blur_mid": float(params.get("blur_mid", 0.8)),
-            "blur_near": float(params.get("blur_near", 0.0)),
-            "mblur_samples": float(params.get("mblur_samples", 3.0)),
-            "glow": float(params.get("glow", 0.0)),
-            "grain": float(params.get("grain", 0.02)),
-            "brightness": float(params.get("brightness", 1.0)),
-            "speed": float(params.get("speed", 1.0)),
-            "motion_direction": float(params.get("motion_direction", 0.0)),
-        },
+        "w": w, "h": h, "frames": frames, "seed": int(seed), "unit": unit,
+        "__fps__": fps, "__frames__": n_frames, "__loop__": loop,
+        "emitter": emitter, "layer": layer, "depth": depth, "per_layer": per_layer,
+        "order": order_in_layer, "max_density": max_density, "max_layers": max_layers,
+        "size": size.astype(np.float32), "travel": travel, "margin": margin,
+        "aspect_mix": rng.random(count).astype(np.float32),
+        "shape_pick": rng.random(count).astype(np.float32),
+        "color_t": rng.random(count).astype(np.float32),
+        "angle0": rng.uniform(0.0, 360.0, count).astype(np.float32),
+        # Whole turns per lifetime so spinning/flipping/swaying loops seamlessly.
+        "spin_turns": (rng.choice([-1, 1], count) * np.maximum(1, np.round(life * rng.uniform(0.15, 0.55, count)))).astype(np.float32),
+        "flip_turns": np.maximum(1, np.round(life * rng.uniform(0.6, 1.6, count))).astype(np.float32),
+        "flip_phase": rng.random(count).astype(np.float32),
+        "sway_turns": np.maximum(1, np.round(life * rng.uniform(0.25, 0.6, count))).astype(np.float32),
+        "sway_phase": rng.random(count).astype(np.float32),
+        "sway_amp": rng.uniform(0.5, 1.0, count).astype(np.float32),
+        "lateral": rng.uniform(-0.18, 0.18, count).astype(np.float32),
+        "defaults": {k: params.get(k, d) for k, d in DEFAULTS.items()},
     }
 
 
+def _piece_shape(shape_name, pick):
+    if shape_name == "mixed":
+        return MIXED[min(len(MIXED) - 1, int(pick * len(MIXED)))]
+    return shape_name if shape_name in POLYS else "paper"
+
+
 def render_frame(cache, i):
-    w, h, frames = cache["w"], cache["h"], cache["frames"]
-    loop = bool(cache.get("__loop__", False))
-    fps = max(1, int(cache.get("__fps__", 30)))
-    n = max(1, int(cache.get("__frames__", frames)))
-    t_sec = i / float(fps)
-    u = (i / float(max(1, n - 1))) if n > 1 else 0.0
-    duration_sec = max(1.0 / fps, (n - 1) / float(fps))
-    params = frame_params(cache)
-    defaults = cache["defaults"]
-    speed = max(0.0, float(params.get("speed", defaults["speed"])))
+    w, h = cache["w"], cache["h"]
+    p = dict(cache["defaults"])
+    p.update({k: v for k, v in frame_params(cache).items() if k in DEFAULTS})
+    clock = Clock(cache, i)
+    unit = cache["unit"]
+    em = cache["emitter"]
+    density_ratio = float(np.clip(float(p["density"]) / cache["max_density"], 0.0, 1.0))
+    layers_now = float(np.clip(float(p["layers"]), 1.0, cache["max_layers"]))
+    per_layer = np.array(cache["per_layer"], dtype=np.float32)
+    vis = np.clip(density_ratio * per_layer[cache["layer"]] - cache["order"], 0.0, 1.0)
+    vis *= np.clip(layers_now - cache["layer"], 0.0, 1.0)
 
-    def phase_from_rate(rate_hz, u_value, t_value):
-        scaled_rate = float(rate_hz) * speed
-        if loop:
-            return scaled_rate * duration_sec * u_value
-        return scaled_rate * t_value
+    angle = math.radians(float(p["motion_direction"]))
+    fdx, fdy = -math.sin(angle), math.cos(angle)          # fall direction
+    sdx, sdy = fdy, -fdx                                  # sideways
+    cx, cy = w * 0.5, h * 0.5
+    half_span = 0.5 * math.hypot(w, h) + cache["margin"]
+    shape_name = str(p["shape"])
+    shimmer = float(np.clip(p["shimmer"], 0.0, 1.0))
+    spin = float(p["spin"])
+    sway = float(np.clip(p["sway"], 0.0, 2.0)) * 26.0 * unit
+    colors = palette_sample(p["palette"], cache["color_t"])
+    samples = int(np.clip(round(float(p["mblur_samples"])), 1, 6))
+    dt = 1.0 / clock.fps
 
-    density = max(0.0, float(params.get("density", defaults["density"])))
-    density_ratio = min(1.0, density / max(1e-6, cache["max_density"]))
-    current_layers = min(float(cache["max_layers"]), max(1.0, float(params.get("layers", defaults["layers"]))))
-    samples = max(1, int(round(float(params.get("mblur_samples", defaults["mblur_samples"])))) )
+    # Far pieces are blurred anyway, so draw them at half resolution; the
+    # nearest layer is supersampled for clean edges.
+    scales = [0.5, 1.0, float(ssaa_factor(w, h))]
+    buckets = []
+    for b in range(3):
+        s = scales[b]
+        img = Image.new("RGBA", (max(1, int(round(w * s))), max(1, int(round(h * s)))), (0, 0, 0, 0))
+        buckets.append((img, ImageDraw.Draw(img, "RGBA"), s))
 
-    layer_imgs = [Image.new("RGBA", (w, h), (0, 0, 0, 0)) for _ in range(3)]
-    layer_draws = [ImageDraw.Draw(img) for img in layer_imgs]
+    active = np.nonzero(vis > 0.0)[0]
+    shapes = [_piece_shape(shape_name, float(v)) for v in cache["shape_pick"]]
+    margin = 60.0 * unit
+    # Oldest motion-blur sample first so the current position is drawn on top.
+    for sidx in range(samples - 1, -1, -1):
+        ts = clock.t - sidx * dt / samples
+        cyc, age = em.state(ts)
+        lane = (em.rand(cyc, 1) - 0.5) * 2.0 * half_span
+        along = -half_span + age * 2.0 * half_span
+        sw = np.sin(2.0 * np.pi * (cache["sway_turns"] * age + cache["sway_phase"]))
+        side = lane + sw * sway * cache["sway_amp"] + cache["lateral"] * along
+        xs = cx + fdx * along + sdx * side
+        ys = cy + fdy * along + sdy * side
+        flips = np.cos(2.0 * np.pi * (cache["flip_turns"] * age + cache["flip_phase"]))
+        rots = np.radians(cache["angle0"] + 360.0 * cache["spin_turns"] * age * spin)
+        sample_alpha = 1.0 if samples == 1 else min(1.0, 1.6 / samples)
+        for k in active:
+            x, y = float(xs[k]), float(ys[k])
+            if x < -margin or x > w + margin or y < -margin or y > h + margin:
+                continue
+            depth = float(cache["depth"][k])
+            _img, draw, s = buckets[0 if depth < 0.34 else (2 if depth > 0.66 else 1)]
+            shape = shapes[k]
+            poly = POLYS[shape]
+            lo, hi = ASPECT[shape]
+            base = float(cache["size"][k])
+            cf = float(flips[k])
+            sx = base * (lo + (hi - lo) * float(cache["aspect_mix"][k]))
+            sy = base * max(0.08, abs(cf))
+            rot = float(rots[k])
+            cr, sr = math.cos(rot), math.sin(rot)
+            px = poly[:, 0] * sx
+            py = poly[:, 1] * sy
+            pts = np.stack([(px * cr - py * sr + x) * s, (px * sr + py * cr + y) * s], axis=1)
+            shade = (0.55 + 0.45 * abs(cf)) * (0.82 if cf < 0 else 1.0)
+            spec = shimmer * abs(cf) ** 18 * 0.9
+            rgb = np.clip(colors[k] * shade + spec, 0.0, 1.0)
+            alpha = float(vis[k]) * sample_alpha
+            draw.polygon([tuple(v) for v in pts.tolist()],
+                         fill=(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255), int(255 * alpha)))
 
-    for piece in cache["pieces"]:
-        layer_vis = float(np.clip(current_layers - piece["layer"], 0.0, 1.0))
-        density_target = density_ratio * cache["layer_counts"][piece["layer"]]
-        density_vis = float(np.clip(density_target - piece["layer_index"], 0.0, 1.0))
-        vis = min(layer_vis, density_vis)
-        if vis <= 0.0:
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 255))
+    blurs = [float(p["blur_far"]), float(p["blur_mid"]), float(p["blur_near"])]
+    for b, (img, _draw, s) in enumerate(buckets):
+        if img.getbbox() is None:
             continue
+        blur = max(0.0, blurs[b]) * unit * s
+        if blur > 0.05:
+            img = img.convert("RGBa").filter(ImageFilter.GaussianBlur(radius=blur)).convert("RGBA")
+        if img.size != (w, h):
+            img = img.resize((w, h), BOX if s > 1 else BICUBIC)
+        out.alpha_composite(img)
+    out = out.convert("RGB")
 
-        for sample_idx in range(samples):
-            offset_u = (sample_idx / samples) * (0.0 if n <= 1 else (1.0 / max(1, n - 1)))
-            offset_t = (sample_idx / samples) * (1.0 / fps)
-            ts_u = (u + offset_u) % 1.0 if loop else (u + offset_u)
-            ts_t = t_sec + offset_t
-            dx, dy = integrated_motion_offset(
-                cache,
-                ts_t,
-                w * piece["kx"],
-                h * piece["ky"],
-                default=defaults["motion_direction"],
-                scale_key="speed",
-                scale_default=defaults["speed"],
-            )
-            x = (piece["x0"] + dx) % w
-            y = (piece["y0"] + dy) % h
-
-            motion_angle = motion_direction_rad_at(cache, ts_t, default=defaults["motion_direction"])
-            sway_phase = phase_from_rate(piece["ff"], ts_u, ts_t)
-            sway = np.sin(2.0 * np.pi * sway_phase + piece["fp"]) * (8.0 + 14.0 * piece["depth_ratio"])
-            sway_dx, sway_dy = rotate_vector(sway, 0.0, motion_angle)
-            x = (x + sway_dx) % w
-            y = (y + sway_dy) % h
-
-            ang = piece["angle0"] + 360.0 * phase_from_rate(piece["rot"], ts_u, ts_t)
-            alpha = piece["alpha"] * vis * (0.75 if sample_idx > 0 else 1.0) * (1.0 - 0.12 * sample_idx)
-            _draw_piece(layer_draws[piece["bucket"]], x, y, piece["size"], piece["aspect"], ang, piece["shade"], alpha, piece["shape"])
-
-    out = Image.new("RGB", (w, h), (0, 0, 0))
-    blur_values = [
-        max(0.0, float(params.get("blur_far", defaults["blur_far"]))),
-        max(0.0, float(params.get("blur_mid", defaults["blur_mid"]))),
-        max(0.0, float(params.get("blur_near", defaults["blur_near"]))),
-    ]
-    for idx, img in enumerate(layer_imgs):
-        blur = blur_values[idx]
-        if blur > 0:
-            img = img.filter(ImageFilter.GaussianBlur(radius=blur))
-        out = Image.alpha_composite(out.convert("RGBA"), img).convert("RGB")
-
-    glow = max(0.0, float(params.get("glow", defaults["glow"])))
-    if glow > 0:
-        out = add_glow(out, radius=4.0, strength=glow)
-
-    grain = max(0.0, float(params.get("grain", defaults["grain"])))
-    if grain > 0:
-        out = film_grain(out, amount=grain, seed=cache["seed"] + i * 13)
-
-    brightness = float(params.get("brightness", defaults["brightness"]))
-    if brightness != 1.0:
-        out = ImageEnhance.Brightness(out).enhance(brightness)
-
-    return out
+    glow = max(0.0, float(p["glow"]))
+    grain = max(0.0, float(p["grain"]))
+    brightness = max(0.0, float(p["brightness"]))
+    if glow <= 0.0 and grain <= 0.0 and abs(brightness - 1.0) < 1e-3:
+        return out
+    buf = to_buffer(out)
+    if glow > 0.0:
+        buf = bloom(buf, glow, radius=0.7)
+    if grain > 0.0:
+        add_grain(buf, grain, cache["seed"] + clock.loop_frame * 13)
+    return finish(buf, exposure=brightness, knee=0.92)
 
 
 EFFECT = {
     "id": "confetti_pro",
     "name": "Confetti Pro",
+    "category": "Particles",
+    "description": "Colourful tumbling confetti, ribbons, hearts or petals with depth layers.",
+    "seamless": True,
     "params": [
-        {"key": "density", "label": "Density", "type": "float", "default": 1.0, "min": 0.2, "max": 2.5, "step": 0.1},
-        {"key": "layers", "label": "Layers", "type": "int", "default": 3, "min": 1, "max": 5, "step": 1},
-        {"key": "mblur_samples", "label": "Motion Blur Samples", "type": "int", "default": 3, "min": 1, "max": 6, "step": 1},
-        {"key": "blur_far", "label": "Blur Far", "type": "float", "default": 1.6, "min": 0.0, "max": 6.0, "step": 0.2},
-        {"key": "blur_mid", "label": "Blur Mid", "type": "float", "default": 0.8, "min": 0.0, "max": 6.0, "step": 0.2},
-        {"key": "blur_near", "label": "Blur Near", "type": "float", "default": 0.0, "min": 0.0, "max": 4.0, "step": 0.2},
-        {"key": "glow", "label": "Glow", "type": "float", "default": 0.0, "min": 0.0, "max": 1.5, "step": 0.1},
-        {"key": "grain", "label": "Grain", "type": "float", "default": 0.02, "min": 0.0, "max": 0.2, "step": 0.01},
-        {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 2.0, "step": 0.05},
-        {"key": "speed", "label": "Speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05},
-        {"key": "motion_direction", "label": "Motion Direction", "type": "float", "default": 0.0, "min": -180.0, "max": 180.0, "step": 1.0},
+        {"key": "density", "label": "Amount", "type": "float", "default": 1.0, "min": 0.1, "max": 3.0, "step": 0.05, "group": "shape", "pretty": [0.6, 1.6], "help": "How much confetti falls."},
+        {"key": "shape", "label": "Shape", "type": "choice", "default": "mixed", "choices": list(SHAPES), "group": "shape", "help": "Paper squares, circles, ribbons, stars, hearts or petals."},
+        {"key": "size", "label": "Size", "type": "float", "default": 1.0, "min": 0.3, "max": 3.0, "step": 0.05, "group": "shape", "pretty": [0.8, 1.5], "help": "Size of each piece."},
+        {"key": "layers", "label": "Depth Layers", "type": "int", "default": 3, "min": 1, "max": 5, "step": 1, "group": "shape", "help": "More layers add pieces far away and close to camera."},
+        {"key": "speed", "label": "Fall Speed", "type": "float", "default": 1.0, "min": 0.1, "max": 4.0, "step": 0.05, "group": "motion", "pretty": [0.6, 1.4]},
+        {"key": "motion_direction", "label": "Direction", "type": "float", "default": 0.0, "min": -180.0, "max": 180.0, "step": 1.0, "group": "motion", "unit": "deg", "help": "0 = falling down, 180 = rising."},
+        {"key": "spin", "label": "Spin", "type": "float", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.05, "group": "motion", "pretty": [0.5, 1.6]},
+        {"key": "sway", "label": "Sway", "type": "float", "default": 0.5, "min": 0.0, "max": 2.0, "step": 0.05, "group": "motion", "pretty": [0.2, 1.0]},
+        {"key": "palette", "label": "Palette", "type": "palette", "default": "rainbow", "group": "color"},
+        {"key": "shimmer", "label": "Shimmer", "type": "float", "default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05, "group": "color", "pretty": [0.3, 0.9], "help": "Metallic flash as pieces flip."},
+        {"key": "mblur_samples", "label": "Motion Blur", "type": "int", "default": 1, "min": 1, "max": 6, "step": 1, "group": "finish", "help": "Sub-frame samples for motion blur."},
+        {"key": "blur_far", "label": "Far Blur", "type": "float", "default": 1.6, "min": 0.0, "max": 8.0, "step": 0.1, "group": "finish"},
+        {"key": "blur_mid", "label": "Mid Blur", "type": "float", "default": 0.6, "min": 0.0, "max": 8.0, "step": 0.1, "group": "finish", "advanced": True},
+        {"key": "blur_near", "label": "Near Blur", "type": "float", "default": 0.0, "min": 0.0, "max": 8.0, "step": 0.1, "group": "finish", "advanced": True},
+        {"key": "glow", "label": "Glow", "type": "float", "default": 0.0, "min": 0.0, "max": 2.0, "step": 0.05, "group": "finish"},
+        {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 2.5, "step": 0.05, "group": "finish"},
+        {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.2, "step": 0.01, "group": "finish", "advanced": True},
     ],
     "build_cache": build_cache,
     "render_frame": render_frame,

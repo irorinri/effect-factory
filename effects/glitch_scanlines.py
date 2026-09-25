@@ -1,142 +1,153 @@
-from PIL import Image, ImageEnhance
+import math
+import os
+import sys
+
 import numpy as np
-import os, sys
+
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import chromatic_aberration, film_grain, frame_params, integrated_motion_offset, motion_direction_rad_at
+from _fxkit import Clock, add_grain, bloom, finish, new_buffer, palette_stops
+from _fxutil import frame_params
+
+DEFAULTS = {
+    "intensity": 0.9, "scanlines": 0.35, "noise": 0.25, "blocks": 0.5, "tear_prob": 0.15,
+    "chromatic": 3.0, "palette": "cyber", "speed": 1.0, "burstiness": 0.6,
+    "glow": 0.4, "brightness": 1.0, "grain": 0.0,
+}
 
 
 def build_cache(w, h, frames, seed, params):
-    rng = np.random.default_rng(int(seed) & 0x7fffffff)
-    loop = bool(params.get("__loop__", False))
-    tear_events = []
-    for i in range(frames):
-        tear_events.append({
-            "frame": i,
-            "score": float(rng.random()),
-            "y0": int(rng.integers(0, h)),
-            "hh": int(rng.integers(max(2, h // 80), max(6, h // 18))),
-            "dx": int(rng.integers(-w // 12, w // 12)),
-        })
-
+    rng = np.random.default_rng(int(seed) & 0x7FFFFFFF)
     return {
-        "w": w,
-        "h": h,
-        "frames": frames,
-        "__loop__": loop,
-        "__fps__": int(params.get("__fps__", 30)),
-        "__frames__": int(params.get("__frames__", frames)),
-        "seed": int(seed),
-        "base_noise": rng.random((h, w), dtype=np.float32),
-        "tear_events": tear_events,
-        "defaults": {
-            "intensity": float(params.get("intensity", 0.55)),
-            "scanlines": float(params.get("scanlines", 0.35)),
-            "noise": float(params.get("noise", 0.18)),
-            "tear_prob": float(params.get("tear_prob", 0.10)),
-            "chromatic": float(params.get("chromatic", 2.0)),
-            "grain": float(params.get("grain", 0.03)),
-            "brightness": float(params.get("brightness", 1.0)),
-            "speed": float(params.get("speed", 1.0)),
-            "motion_direction": float(params.get("motion_direction", 0.0)),
-        },
+        "w": w, "h": h, "frames": frames, "seed": int(seed),
+        "__fps__": int(params.get("__fps__", 30)), "__frames__": int(params.get("__frames__", frames)),
+        "__loop__": bool(params.get("__loop__", False)),
+        "activity_rates": rng.uniform(0.15, 0.9, 3),
+        "activity_phase": rng.random(3),
+        "defaults": {k: params.get(k, d) for k, d in DEFAULTS.items()},
     }
 
 
-def render_frame(cache, i):
-    w, h, frames = cache["w"], cache["h"], cache["frames"]
-    loop = bool(cache.get("__loop__", False))
-    fps = max(1, int(cache.get("__fps__", 30)))
-    n = max(1, int(cache.get("__frames__", frames)))
-    t_sec = i / float(fps)
-    u = (i / float(max(1, n - 1))) if n > 1 else 0.0
-    duration_sec = max(1.0 / fps, (n - 1) / float(fps))
-    params = frame_params(cache)
-    defaults = cache["defaults"]
-    speed = max(0.0, float(params.get("speed", defaults["speed"])))
-
-    def phase_from_rate(rate_hz):
-        scaled_rate = float(rate_hz) * speed
-        if loop:
-            return scaled_rate * duration_sec * u
-        return scaled_rate * t_sec
-
-    intensity = float(params.get("intensity", defaults["intensity"]))
-    scanlines = max(0.0, float(params.get("scanlines", defaults["scanlines"])))
-    noise_amount = max(0.0, float(params.get("noise", defaults["noise"])))
-    tear_prob = max(0.0, float(params.get("tear_prob", defaults["tear_prob"])))
-    motion_angle = motion_direction_rad_at(cache, t_sec, default=defaults["motion_direction"])
-
-    img = np.zeros((h, w, 3), dtype=np.float32)
-
-    if scanlines > 0:
-        x = np.arange(w, dtype=np.float32)
-        y = np.arange(h, dtype=np.float32)
-        nx = float(np.sin(motion_angle))
-        ny = float(np.cos(motion_angle))
-        proj = (y[:, None] * ny + x[None, :] * nx) / 2.0
-        scan = 0.5 + 0.5 * np.sin(2.0 * np.pi * (proj + phase_from_rate(6.0)))
-        img += (scan * scanlines * 0.25)[..., None]
-
-    if noise_amount > 0:
-        base_noise = cache["base_noise"]
-        oxf, oyf = integrated_motion_offset(
-            cache,
-            t_sec,
-            97.0,
-            41.0,
-            default=defaults["motion_direction"],
-            scale_key="speed",
-            scale_default=defaults["speed"],
-        )
-        nn = np.roll(np.roll(base_noise, int(oxf) % w, axis=1), int(oyf) % h, axis=0)
-        img += nn[..., None] * noise_amount * 0.75
-
-    if intensity > 0:
-        rng = np.random.default_rng((cache["seed"] + i * 1337) & 0x7fffffff)
-        count = int((w * h) / 50000 * max(0.0, intensity) * 25)
-        if count > 0:
-            xs = rng.integers(0, w, size=count)
-            ys = rng.integers(0, h, size=count)
-            img[ys, xs, :] += rng.uniform(0.6, 1.0, size=(count, 1))
-
-    for event in cache["tear_events"]:
-        if event["frame"] != i or event["score"] > tear_prob:
-            continue
-        y0 = event["y0"]
-        y1 = min(h, y0 + event["hh"])
-        img[y0:y1, :, :] = np.roll(img[y0:y1, :, :], event["dx"], axis=1)
-
-    img = np.clip(img * intensity, 0.0, 1.0)
-    out = Image.fromarray((img * 255).astype(np.uint8), mode="RGB")
-
-    chromatic = int(round(float(params.get("chromatic", defaults["chromatic"]))))
-    if chromatic > 0:
-        out = chromatic_aberration(out, shift=chromatic)
-
-    grain = max(0.0, float(params.get("grain", defaults["grain"])))
-    if grain > 0:
-        out = film_grain(out, amount=grain, seed=cache["seed"] + i * 29)
-
-    brightness = float(params.get("brightness", defaults["brightness"]))
-    if brightness != 1.0:
-        out = ImageEnhance.Brightness(out).enhance(brightness)
-
+def _shift_x(arr, dx):
+    """Shift columns without wrapping (vacated area becomes black)."""
+    if dx == 0:
+        return arr
+    out = np.zeros_like(arr)
+    if dx > 0:
+        out[:, dx:] = arr[:, :-dx]
+    else:
+        out[:, :dx] = arr[:, -dx:]
     return out
+
+
+def render_frame(cache, i):
+    w, h = cache["w"], cache["h"]
+    p = dict(cache["defaults"])
+    p.update({k: v for k, v in frame_params(cache).items() if k in DEFAULTS})
+    clock = Clock(cache, i)
+    t = clock.t
+    unit = min(w, h) / 1080.0
+    n = cache["__frames__"]
+    # Random events are keyed on the frame index within the loop, so the
+    # pattern repeats exactly after one loop.
+    fi = i % n if clock.loop else i
+    rng = np.random.default_rng((cache["seed"] * 7919 + fi * 104729) & 0x7FFFFFFF)
+    intensity = max(0.0, float(p["intensity"]))
+    speed = max(0.0, float(p["speed"]))
+    stops = np.asarray(palette_stops(p["palette"]), dtype=np.float32)
+
+    burst = float(np.clip(p["burstiness"], 0.0, 1.0))
+    wave = sum(math.sin(2.0 * math.pi * (clock.rate(r * max(0.05, speed)) * t + ph))
+               for r, ph in zip(cache["activity_rates"], cache["activity_phase"])) / 3.0
+    activity = (1.0 - burst) * 0.5 + burst * max(0.0, wave) ** 0.7 * 1.6
+
+    buf = new_buffer(w, h)
+    scan = max(0.0, float(p["scanlines"]))
+    if scan > 0.0:
+        pitch = max(2, int(round(3 * unit)))
+        rows = np.zeros(h, dtype=np.float32)
+        rows[::pitch] = 1.0
+        roll = clock.rate(0.12 * speed) * t if speed > 0 else 0.0
+        band_y = ((roll % 1.0) * 1.4 - 0.2) * h
+        yy = np.arange(h, dtype=np.float32)
+        band = np.exp(-((yy - band_y) / (0.06 * h)) ** 2)
+        profile = rows * 0.08 * scan + band * 0.22 * scan
+        buf += profile[:, None, None] * (stops.mean(axis=0) * 0.5 + 0.5)
+
+    noise = max(0.0, float(p["noise"]))
+    if noise > 0.0:
+        for _ in range(int(rng.integers(0, 2 + int(4 * activity * noise) + 1))):
+            bh = int(rng.uniform(0.01, 0.08) * h) + 1
+            y0 = int(rng.integers(0, max(1, h - bh)))
+            static = rng.random((bh, w), dtype=np.float32) ** 1.6
+            col = stops[int(rng.integers(0, len(stops)))]
+            buf[y0:y0 + bh] += static[:, :, None] * col * (0.8 * noise * (0.5 + activity))
+
+    blocks = max(0.0, float(p["blocks"]))
+    if blocks > 0.0:
+        n_blocks = int(rng.poisson(max(0.0, 12.0 * blocks * activity)))
+        for _ in range(n_blocks):
+            bw = int(rng.uniform(0.03, 0.35) * w)
+            bh = int(rng.uniform(0.01, 0.07) * h) + 1
+            x0 = int(rng.integers(-bw // 2, w))
+            y0 = int(rng.integers(0, h))
+            xa, xb = max(0, x0), min(w, x0 + bw)
+            ya, yb = max(0, y0), min(h, y0 + bh)
+            if xa >= xb or ya >= yb:
+                continue
+            col = stops[int(rng.integers(0, len(stops)))]
+            level = float(rng.uniform(0.45, 1.1)) * min(1.5, blocks * 1.4)
+            if rng.random() < 0.5:
+                stripes = (np.arange(xa, xb) // max(1, int(rng.integers(2, 9)) * max(1, int(unit))) % 2).astype(np.float32)
+                buf[ya:yb, xa:xb] += stripes[None, :, None] * col * level
+            else:
+                buf[ya:yb, xa:xb] += col * level
+
+    for _ in range(int(rng.integers(0, 3 + int(12 * activity)))):
+        x = int(rng.integers(0, w)); y = int(rng.integers(0, h))
+        s = max(1, int(round(rng.uniform(1.0, 3.0) * unit)))
+        buf[y:y + s, x:x + s] += stops[int(rng.integers(0, len(stops)))] * 1.2
+
+    tear = float(np.clip(p["tear_prob"], 0.0, 1.0))
+    if tear > 0.0 and rng.random() < tear * (0.4 + activity):
+        for _ in range(int(rng.integers(1, 4))):
+            th = int(rng.uniform(0.02, 0.12) * h) + 1
+            ty = int(rng.integers(0, max(1, h - th)))
+            shift = int(rng.uniform(-0.08, 0.08) * w)
+            buf[ty:ty + th] = _shift_x(buf[ty:ty + th], shift)
+
+    chroma = int(round(float(p["chromatic"]) * unit * (0.6 + 0.8 * min(1.0, activity))))
+    if chroma != 0:
+        buf[..., 0] = _shift_x(buf[..., 0], -chroma)
+        buf[..., 2] = _shift_x(buf[..., 2], chroma)
+
+    buf *= intensity
+    glow = max(0.0, float(p["glow"]))
+    if glow > 0.0:
+        buf = bloom(buf, glow, radius=0.6)
+    if float(p["grain"]) > 0.0:
+        add_grain(buf, float(p["grain"]), cache["seed"] + clock.loop_frame * 29)
+    return finish(buf, exposure=max(0.0, float(p["brightness"])))
 
 
 EFFECT = {
     "id": "glitch_scanlines",
     "name": "Glitch Scanlines",
+    "category": "Glitch",
+    "description": "VHS roll bars, noise bands, digital blocks, tearing and RGB split.",
+    "seamless": True,
     "params": [
-        {"key": "intensity", "label": "Intensity", "type": "float", "default": 0.55, "min": 0.05, "max": 1.5, "step": 0.05},
-        {"key": "scanlines", "label": "Scanlines", "type": "float", "default": 0.35, "min": 0.0, "max": 1.2, "step": 0.05},
-        {"key": "noise", "label": "Noise", "type": "float", "default": 0.18, "min": 0.0, "max": 1.2, "step": 0.05},
-        {"key": "tear_prob", "label": "Tear Probability", "type": "float", "default": 0.10, "min": 0.0, "max": 0.5, "step": 0.01},
-        {"key": "chromatic", "label": "Chromatic Shift", "type": "int", "default": 2, "min": 0, "max": 10, "step": 1},
-        {"key": "grain", "label": "Grain", "type": "float", "default": 0.03, "min": 0.0, "max": 0.25, "step": 0.01},
-        {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 2.0, "step": 0.05},
-        {"key": "speed", "label": "Speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05},
-        {"key": "motion_direction", "label": "Motion Direction", "type": "float", "default": 0.0, "min": -180.0, "max": 180.0, "step": 1.0},
+        {"key": "intensity", "label": "Intensity", "type": "float", "default": 0.9, "min": 0.05, "max": 2.0, "step": 0.05, "group": "shape", "pretty": [0.5, 1.1]},
+        {"key": "scanlines", "label": "Scanlines", "type": "float", "default": 0.35, "min": 0.0, "max": 1.5, "step": 0.05, "group": "shape", "help": "Fine scanlines and a rolling VHS bar."},
+        {"key": "noise", "label": "Noise Bands", "type": "float", "default": 0.25, "min": 0.0, "max": 1.5, "step": 0.05, "group": "shape"},
+        {"key": "blocks", "label": "Digital Blocks", "type": "float", "default": 0.5, "min": 0.0, "max": 1.5, "step": 0.05, "group": "shape"},
+        {"key": "tear_prob", "label": "Tearing", "type": "float", "default": 0.15, "min": 0.0, "max": 1.0, "step": 0.01, "group": "shape"},
+        {"key": "speed", "label": "Speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05, "group": "motion"},
+        {"key": "burstiness", "label": "Burstiness", "type": "float", "default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05, "group": "motion", "help": "Calm stretches between intense glitch bursts."},
+        {"key": "palette", "label": "Palette", "type": "palette", "default": "cyber", "group": "color"},
+        {"key": "chromatic", "label": "RGB Split", "type": "float", "default": 3.0, "min": 0.0, "max": 20.0, "step": 0.5, "group": "color"},
+        {"key": "glow", "label": "Glow", "type": "float", "default": 0.4, "min": 0.0, "max": 2.0, "step": 0.05, "group": "finish"},
+        {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05, "group": "finish"},
+        {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.25, "step": 0.01, "group": "finish", "advanced": True},
     ],
     "build_cache": build_cache,
     "render_frame": render_frame,

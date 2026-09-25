@@ -1,12 +1,13 @@
 from functools import lru_cache
 
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageFilter
 import numpy as np
 import os, sys
 
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, film_grain, frame_params, integrated_motion_offset, max_numeric, min_numeric, motion_direction_rad_at, rotate_vector, timeline_numeric_at
-from _rain_asset_shapes import make_builtin_rain_sprite, parse_builtin_rain_sprite_token
+from _fxutil import frame_params, integrated_motion_offset, max_numeric, min_numeric, motion_direction_rad_at, rotate_vector, timeline_numeric_at
+from _fxkit import add_grain, bloom, finish, palette_is_mono, palette_lut, palette_sample, tile_noise, to_buffer
+from _rain_asset_shapes import builtin_rain_sprite_token, make_builtin_rain_sprite, parse_builtin_rain_sprite_token
 
 
 def _visible_fraction(target: float, index: int) -> float:
@@ -73,6 +74,7 @@ def _speed_randomness_integral_state(cache, default_motion_direction: float = 0.
         return states[cache_key]
     fps = max(1, int(cache.get("__fps__", 30)))
     frames = max(1, int(cache.get("__frames__", cache.get("frames", 1))))
+    frames = max(frames, int(cache.get("__horizon__", frames) or frames)) + 1
     times = [idx / float(fps) for idx in range(frames)]
     angles = [motion_direction_rad_at(cache, t, default=default_motion_direction) for t in times]
     speed_scales = [timeline_numeric_at(cache, t, key="speed", default=default_speed) for t in times]
@@ -105,6 +107,11 @@ def _speed_randomness_integral_at(cache, time_sec: float, default_motion_directi
     if not times:
         return 0.0, 0.0
     if time_sec >= times[-1]:
+        if len(times) >= 2:
+            extra = float(time_sec) - times[-1]
+            step = max(1e-9, times[-1] - times[-2])
+            return (cos_acc[-1] + (cos_acc[-1] - cos_acc[-2]) / step * extra,
+                    sin_acc[-1] + (sin_acc[-1] - sin_acc[-2]) / step * extra)
         return cos_acc[-1], sin_acc[-1]
     fps = state["fps"]
     idx = min(len(times) - 1, max(0, int(np.floor(float(time_sec) * fps + 1e-9))))
@@ -306,6 +313,8 @@ def build_cache(w, h, frames, seed, params):
         "__loop__": loop,
         "__fps__": int(params.get("__fps__", 30)),
         "__frames__": int(params.get("__frames__", frames)),
+        "__horizon__": int(params.get("__horizon__", params.get("__frames__", frames))),
+        "hue_field": tile_noise(max(16, w // 8), max(9, h // 8), cells=2.5 * w / max(1.0, h), seed=int(seed) + 71, octaves=2),
         "particles": particles,
         "max_density": max_density,
         "sprite": sprite,
@@ -328,7 +337,8 @@ def build_cache(w, h, frames, seed, params):
             "motion_direction": float(params.get("motion_direction", 12.0)),
             "grid_alignment": float(np.clip(_grid_alignment_mix(params, 0.0), 0.0, 1.0)),
             "glow_radius": float(params.get("glow_radius", 3.0)),
-            "glow_strength": float(params.get("glow_strength", 0.0)),
+            "glow_strength": float(params.get("glow_strength", 0.35)),
+            "palette": str(params.get("palette", "ice")),
         },
     }
 
@@ -455,37 +465,65 @@ def render_frame(cache, i):
         layer = layer.filter(ImageFilter.GaussianBlur(radius=blur))
 
     out = Image.alpha_composite(Image.new("RGBA", (w, h), (0, 0, 0, 255)), layer).convert("RGB")
+    buf = to_buffer(out)
+
+    palette = str(params.get("palette", defaults["palette"]))
+    if palette_is_mono(palette):
+        buf *= palette_sample(palette, 0.5)
+    else:
+        # Colour drifts across the frame in soft regions (neon rain).
+        hue = cache["hue_field"]
+        lut = palette_lut(palette)
+        color_small = lut[np.clip(hue * 255.0, 0, 255).astype(np.uint8)]
+        color = np.asarray(Image.fromarray((color_small * 255).astype(np.uint8), "RGB").resize((w, h), Image.Resampling.BICUBIC), dtype=np.float32) / 255.0
+        buf *= color
 
     if glow_strength > 0.0:
-        out = add_glow(out, radius=glow_radius, strength=glow_strength)
-
+        buf = bloom(buf, glow_strength, radius=0.3 + glow_radius / 8.0)
     if grain > 0.0:
-        out = film_grain(out, amount=grain, seed=cache["seed"] + i * 17)
+        add_grain(buf, grain, cache["seed"] + (i % n if loop else i) * 17)
+    return finish(buf, exposure=max(0.0, float(params.get("brightness", defaults["brightness"]))))
 
-    brightness = float(params.get("brightness", defaults["brightness"]))
-    if brightness != 1.0:
-        out = ImageEnhance.Brightness(out).enhance(brightness)
+def _builtin_preview(token, size=72):
+    return make_builtin_rain_sprite(token, size=size)
 
-    return out
 
 EFFECT = {
     "id": "png_rain",
-    "name": "Generic Rain",
+    "name": "Rain & Sprites",
+    "category": "Particles",
+    "description": "Falling rain drops, shapes or your own transparent PNG sprites.",
+    "seamless": False,
+    "asset": {
+        "key": "particle_sprite_path",
+        "label": "Particle",
+        "hint": "Pick a built-in shape or any transparent PNG.",
+        "filetypes": [("Transparent PNG", "*.png")],
+        "builtin": [
+            {"token": builtin_rain_sprite_token("drop"), "label": "Drop"},
+            {"token": builtin_rain_sprite_token("circle"), "label": "Circle"},
+            {"token": builtin_rain_sprite_token("square"), "label": "Square"},
+            {"token": builtin_rain_sprite_token("star"), "label": "Star"},
+        ],
+        "default": builtin_rain_sprite_token("drop"),
+        "preview": _builtin_preview,
+    },
     "params": [
-        {"key": "density", "label": "Density", "type": "float", "default": 1.0, "min": 0.2, "max": 2.5, "step": 0.1},
-        {"key": "size_min", "label": "Min Size", "type": "float", "default": 12.0, "min": 4.0, "max": 48.0, "step": 1.0},
-        {"key": "size_max", "label": "Max Size", "type": "float", "default": 30.0, "min": 8.0, "max": 96.0, "step": 1.0},
-        {"key": "size_randomness", "label": "Size Randomness", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05},
-        {"key": "length", "label": "Trail", "type": "float", "default": 1.8, "min": 0.5, "max": 4.0, "step": 0.1},
-        {"key": "blur", "label": "Blur", "type": "float", "default": 0.2, "min": 0.0, "max": 6.0, "step": 0.1},
-        {"key": "glow_radius", "label": "Glow Radius", "type": "float", "default": 3.0, "min": 0.0, "max": 16.0, "step": 0.5},
-        {"key": "glow_strength", "label": "Glow Strength", "type": "float", "default": 0.0, "min": 0.0, "max": 2.0, "step": 0.05},
-        {"key": "grain", "label": "Grain", "type": "float", "default": 0.02, "min": 0.0, "max": 0.2, "step": 0.01},
-        {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05},
-        {"key": "speed", "label": "Speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05},
-        {"key": "speed_randomness", "label": "Speed Randomness", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05},
-        {"key": "motion_direction", "label": "Motion Direction", "type": "float", "default": 12.0, "min": -180.0, "max": 180.0, "step": 1.0},
-        {"key": "grid_alignment", "label": "Grid Alignment", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05},
+        {"key": "density", "label": "Density", "type": "float", "default": 1.0, "min": 0.2, "max": 2.5, "step": 0.1, "group": "shape", "pretty": [0.7, 1.8]},
+        {"key": "size_min", "label": "Min Size", "type": "float", "default": 12.0, "min": 4.0, "max": 48.0, "step": 1.0, "group": "shape"},
+        {"key": "size_max", "label": "Max Size", "type": "float", "default": 30.0, "min": 8.0, "max": 96.0, "step": 1.0, "group": "shape"},
+        {"key": "size_randomness", "label": "Size Random", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05, "group": "shape", "pretty": [0.2, 0.8]},
+        {"key": "length", "label": "Trail", "type": "float", "default": 1.8, "min": 0.5, "max": 4.0, "step": 0.1, "group": "shape", "help": "Stretch along the fall direction."},
+        {"key": "speed", "label": "Speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05, "group": "motion", "pretty": [0.7, 1.6]},
+        {"key": "speed_randomness", "label": "Speed Random", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05, "group": "motion", "pretty": [0.2, 0.7]},
+        {"key": "motion_direction", "label": "Direction", "type": "float", "default": 12.0, "min": -180.0, "max": 180.0, "step": 1.0, "group": "motion", "unit": "deg", "help": "0 = straight down."},
+        {"key": "grid_alignment", "label": "Random/Aligned", "type": "float", "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05, "group": "motion", "help": "Random on the left, flow-aligned rows on the right."},
+        {"key": "palette", "label": "Palette", "type": "palette", "default": "ice", "group": "color"},
+        {"key": "blur", "label": "Blur", "type": "float", "default": 0.2, "min": 0.0, "max": 6.0, "step": 0.1, "group": "finish"},
+        {"key": "glow_strength", "label": "Glow", "type": "float", "default": 0.35, "min": 0.0, "max": 2.0, "step": 0.05, "group": "finish"},
+        {"key": "glow_radius", "label": "Glow Size", "type": "float", "default": 3.0, "min": 0.0, "max": 16.0, "step": 0.5, "group": "finish", "advanced": True},
+        {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05, "group": "finish"},
+        {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.2, "step": 0.01, "group": "finish", "advanced": True},
     ],
     "build_cache": build_cache,
     "render_frame": render_frame,

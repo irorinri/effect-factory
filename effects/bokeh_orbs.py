@@ -1,177 +1,146 @@
-from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
+import math
+import os
+import sys
+
 import numpy as np
-import os, sys
+
 sys.path.append(os.path.dirname(__file__))
-from _fxutil import add_glow, chromatic_aberration, film_grain, frame_params, integrated_motion_offset, max_int, max_numeric
+from _fxkit import (Clock, Emitter, MotionPath, add_grain, bloom, disc_sprite, finish, life_envelope,
+                    new_buffer, palette_sample, stamp)
+from _fxutil import frame_params, max_int
 
+APERTURES = {"circle": 0, "hexagon": 6, "heptagon": 7, "octagon": 8}
 
-def _visible_fraction(target: float, index: int) -> float:
-    return float(np.clip(float(target) - float(index), 0.0, 1.0))
+DEFAULTS = {
+    "count": 45, "size_min": 24.0, "size_max": 140.0, "rim": 0.45, "aperture": "circle",
+    "opacity": 0.55, "speed": 1.0, "motion_direction": 180.0, "spread": 0.8, "breathe": 0.3,
+    "palette": "sunset", "tint_r": 1.0, "tint_g": 1.0, "tint_b": 1.0,
+    "blur": 1.5, "chromatic": 1.0, "glow_radius": 8.0, "glow_strength": 0.6,
+    "brightness": 1.0, "grain": 0.0,
+}
 
 
 def build_cache(w, h, frames, seed, params):
-    rng = np.random.default_rng(int(seed) & 0x7fffffff)
+    rng = np.random.default_rng(int(seed) & 0x7FFFFFFF)
+    fps = int(params.get("__fps__", 30))
+    n_frames = int(params.get("__frames__", frames))
     loop = bool(params.get("__loop__", False))
-    max_count = max(1, max_int(params, "count", 45))
-    max_drift_x = max(0.0, max_numeric(params, "drift_x_cycles", 1.0))
-    max_drift_y = max(0.0, max_numeric(params, "drift_y_cycles", 0.0))
-
-    orbs = []
-    for idx in range(max_count):
-        orbs.append({
-            "index": idx,
-            "x0": float(rng.uniform(0, w)),
-            "y0": float(rng.uniform(0, h)),
-            "drift_fx": float(rng.uniform(-1.0, 1.0)) if max_drift_x > 0 else 0.0,
-            "drift_fy": float(rng.uniform(-1.0, 1.0)) if max_drift_y > 0 else 0.0,
-            "size_mix": float(rng.uniform(0.0, 1.0)),
-            "alpha": float(rng.uniform(0.08, 0.24)),
-            "ring": float(rng.uniform(0.25, 0.75)),
-            "flicker_f": float(rng.uniform(1.0, 5.0)),
-            "flicker_p": float(rng.uniform(0.0, 2.0 * np.pi)),
-            "warm": float(rng.uniform(0.85, 1.20)),
-        })
-
+    count = int(np.clip(max_int(params, "count", DEFAULTS["count"]), 1, 400))
     return {
-        "w": w,
-        "h": h,
-        "frames": frames,
-        "seed": int(seed),
-        "__loop__": loop,
-        "__fps__": int(params.get("__fps__", 30)),
-        "__frames__": int(params.get("__frames__", frames)),
-        "orbs": orbs,
-        "max_count": max_count,
-        "defaults": {
-            "count": float(params.get("count", max_count)),
-            "size_min": float(params.get("size_min", 24.0)),
-            "size_max": float(params.get("size_max", 140.0)),
-            "tint_r": float(params.get("tint_r", 0.95)),
-            "tint_g": float(params.get("tint_g", 0.98)),
-            "tint_b": float(params.get("tint_b", 1.05)),
-            "glow_radius": float(params.get("glow_radius", 8.0)),
-            "glow_strength": float(params.get("glow_strength", 0.7)),
-            "chromatic": float(params.get("chromatic", 1.0)),
-            "grain": float(params.get("grain", 0.04)),
-            "brightness": float(params.get("brightness", 1.0)),
-            "speed": float(params.get("speed", 1.0)),
-            "blur": float(params.get("blur", 1.5)),
-            "motion_direction": float(params.get("motion_direction", 0.0)),
-            "drift_x_cycles": float(params.get("drift_x_cycles", 1.0)),
-            "drift_y_cycles": float(params.get("drift_y_cycles", 0.0)),
-        },
+        "w": w, "h": h, "frames": frames, "seed": int(seed),
+        "__fps__": fps, "__frames__": n_frames, "__loop__": loop,
+        "__horizon__": int(params.get("__horizon__", n_frames)),
+        "__timeline__": params.get("__timeline__"),
+        "emitter": Emitter(count, int(seed) + 17, fps, n_frames, loop, life_min=5.0, life_max=11.0),
+        "rank": rng.permutation(count).astype(np.float32),
+        "size_mix": rng.random(count).astype(np.float32),
+        "color_t": rng.random(count).astype(np.float32),
+        "alpha": rng.uniform(0.35, 1.0, count).astype(np.float32),
+        "drift_mix": rng.uniform(0.35, 1.2, count).astype(np.float32),
+        "drift_jitter": rng.uniform(-1.0, 1.0, count).astype(np.float32),
+        "breathe_cycles": rng.integers(1, 3, count).astype(np.float32),
+        "breathe_phase": rng.random(count).astype(np.float32),
+        "defaults": {k: params.get(k, d) for k, d in DEFAULTS.items()},
     }
 
 
+def _quant_radius(r):
+    # ~3% logarithmic steps keep the sprite cache small without visible popping.
+    if r <= 4.0:
+        return round(r * 4.0) / 4.0
+    return round(math.exp(round(math.log(r) / 0.03) * 0.03), 2)
+
+
 def render_frame(cache, i):
-    w, h, frames = cache["w"], cache["h"], cache["frames"]
-    loop = bool(cache.get("__loop__", False))
-    fps = max(1, int(cache.get("__fps__", 30)))
-    n = max(1, int(cache.get("__frames__", frames)))
-    t_sec = i / float(fps)
-    u = (i / float(max(1, n - 1))) if n > 1 else 0.0
-    duration_sec = max(1.0 / fps, (n - 1) / float(fps))
-    params = frame_params(cache)
-    defaults = cache["defaults"]
-    speed = max(0.0, float(params.get("speed", defaults["speed"])))
+    w, h = cache["w"], cache["h"]
+    p = dict(cache["defaults"])
+    p.update({k: v for k, v in frame_params(cache).items() if k in DEFAULTS})
+    clock = Clock(cache, i)
+    t = clock.t
+    unit = min(w, h) / 1080.0
+    em = cache["emitter"]
 
-    def phase_from_rate(rate_hz):
-        scaled_rate = float(rate_hz) * speed
-        if loop:
-            return scaled_rate * duration_sec * u
-        return scaled_rate * t_sec
+    count = float(np.clip(float(p["count"]), 0.0, em.count))
+    vis = np.clip(count - cache["rank"], 0.0, 1.0)
+    cyc, age = em.state(t)
+    age_sec = age * em.life
+    size_min = max(1.0, float(p["size_min"]))
+    size_max = max(size_min, float(p["size_max"]))
 
-    count = min(float(cache["max_count"]), max(0.0, float(params.get("count", defaults["count"]))))
-    size_min = max(0.1, float(params.get("size_min", defaults["size_min"])))
-    size_max = max(size_min, float(params.get("size_max", defaults["size_max"])))
-    drift_x = max(0.0, float(params.get("drift_x_cycles", defaults["drift_x_cycles"])))
-    drift_y = max(0.0, float(params.get("drift_y_cycles", defaults["drift_y_cycles"])))
-    tr = float(params.get("tint_r", defaults["tint_r"]))
-    tg = float(params.get("tint_g", defaults["tint_g"]))
-    tb = float(params.get("tint_b", defaults["tint_b"]))
+    margin = size_max * unit
+    spawn_x = em.rand(cyc, 1) * (w + 2 * margin) - margin
+    spawn_y = em.rand(cyc, 2) * (h + 2 * margin) - margin
+    path = MotionPath({**frame_params(cache), "__timeline__": cache.get("__timeline__"),
+                       "__fps__": cache["__fps__"], "__frames__": cache["__frames__"],
+                       "__horizon__": cache["__horizon__"]},
+                      direction_default=DEFAULTS["motion_direction"])
+    ox, oy = path.offset(t - age_sec, t)
+    jitter = cache["drift_jitter"] * float(np.clip(p["spread"], 0.0, 1.0)) * math.pi
+    cj, sj = np.cos(jitter), np.sin(jitter)
+    drift_px = 22.0 * unit * cache["drift_mix"]
+    x = spawn_x + (ox * cj - oy * sj) * drift_px
+    y = spawn_y + (ox * sj + oy * cj) * drift_px
 
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    dr = ImageDraw.Draw(img)
+    breathe = float(np.clip(p["breathe"], 0.0, 1.0))
+    wave = np.sin(2.0 * np.pi * (cache["breathe_cycles"] * age + cache["breathe_phase"]))
+    radius = (size_min + cache["size_mix"] ** 1.4 * (size_max - size_min)) * unit * (1.0 + 0.08 * breathe * wave)
+    env = life_envelope(age, 0.3, 0.3)
+    # Bigger orbs are further out of focus, so their light spreads thinner.
+    focus = np.clip((40.0 * unit / np.maximum(radius, 1.0)) ** 0.35, 0.35, 1.25)
+    opacity = float(np.clip(p["opacity"], 0.0, 2.0))
+    alpha = cache["alpha"] * env * vis * focus * opacity * (0.85 + 0.15 * wave * breathe) * 0.95
 
-    for orb in cache["orbs"]:
-        vis = _visible_fraction(count, orb["index"])
-        if vis <= 0.0:
+    tint = np.array([p["tint_r"], p["tint_g"], p["tint_b"]], dtype=np.float32)
+    colors = palette_sample(p["palette"], cache["color_t"]) * tint
+    sides = APERTURES.get(str(p["aperture"]), 0)
+    rim = round(float(np.clip(p["rim"], 0.0, 1.0)) * 10.0) / 10.0
+    soft = round(0.03 + float(np.clip(p["blur"], 0.0, 6.0)) * 0.035, 3)
+    fringe = round(float(np.clip(p["chromatic"], 0.0, 8.0)) * 0.012, 3)
+
+    buf = new_buffer(w, h)
+    order = np.argsort(-radius)  # large, dim orbs first
+    for k in order:
+        a = float(alpha[k])
+        if a <= 0.004:
             continue
+        sprite = disc_sprite(_quant_radius(float(radius[k])), soft, sides, rim, 15.0, fringe)
+        stamp(buf, sprite, float(x[k]), float(y[k]), colors[k], a)
 
-        dx, dy = integrated_motion_offset(
-            cache,
-            t_sec,
-            w * orb["drift_fx"] * drift_x,
-            h * orb["drift_fy"] * drift_y,
-            default=defaults["motion_direction"],
-            scale_key="speed",
-            scale_default=defaults["speed"],
-        )
-        x = (orb["x0"] + dx) % w
-        y = (orb["y0"] + dy) % h
-
-        p_flicker = phase_from_rate(orb["flicker_f"])
-        breathe = 1.0 + 0.06 * np.sin(2.0 * np.pi * p_flicker + orb["flicker_p"])
-        rr = (size_min + orb["size_mix"] * (size_max - size_min)) * breathe
-        a = orb["alpha"] * vis * (0.7 + 0.3 * np.sin(2.0 * np.pi * p_flicker + orb["flicker_p"]) + 0.3)
-
-        col = (
-            int(np.clip(255 * tr * orb["warm"], 0, 255)),
-            int(np.clip(255 * tg * orb["warm"], 0, 255)),
-            int(np.clip(255 * tb * orb["warm"], 0, 255)),
-            int(np.clip(255 * a, 0, 255)),
-        )
-        bbox = (x - rr, y - rr, x + rr, y + rr)
-        dr.ellipse(bbox, fill=(col[0], col[1], col[2], int(col[3] * 0.35)))
-        rr2 = rr * orb["ring"]
-        bbox2 = (x - rr2, y - rr2, x + rr2, y + rr2)
-        dr.ellipse(bbox2, outline=(col[0], col[1], col[2], int(col[3] * 0.95)), width=max(1, int(rr * 0.03)))
-
-    blur = max(0.0, float(params.get("blur", defaults["blur"])))
-    if blur > 0:
-        img = img.filter(ImageFilter.GaussianBlur(radius=blur))
-
-    out = Image.alpha_composite(Image.new("RGBA", (w, h), (0, 0, 0, 255)), img).convert("RGB")
-
-    glow_strength = max(0.0, float(params.get("glow_strength", defaults["glow_strength"])))
-    if glow_strength > 0:
-        out = add_glow(out, radius=max(0.0, float(params.get("glow_radius", defaults["glow_radius"]))), strength=glow_strength)
-
-    chromatic = int(round(float(params.get("chromatic", defaults["chromatic"]))))
-    if chromatic > 0:
-        out = chromatic_aberration(out, shift=chromatic)
-
-    grain = max(0.0, float(params.get("grain", defaults["grain"])))
-    if grain > 0:
-        out = film_grain(out, amount=grain, seed=cache["seed"] + i * 31)
-
-    brightness = float(params.get("brightness", defaults["brightness"]))
-    if brightness != 1.0:
-        out = ImageEnhance.Brightness(out).enhance(brightness)
-
-    return out
+    glow = max(0.0, float(p["glow_strength"]))
+    if glow > 0.0:
+        buf = bloom(buf, glow, radius=0.5 + float(np.clip(p["glow_radius"], 0.0, 20.0)) / 10.0)
+    if float(p["grain"]) > 0.0:
+        add_grain(buf, float(p["grain"]), cache["seed"] + clock.loop_frame * 31)
+    return finish(buf, exposure=max(0.0, float(p["brightness"])))
 
 
 EFFECT = {
     "id": "bokeh_orbs",
     "name": "Bokeh Orbs",
+    "category": "Light",
+    "description": "Out-of-focus lights with lens-like rims, apertures and colour fringing.",
+    "seamless": True,
     "params": [
-        {"key": "count", "label": "Count", "type": "int", "default": 45, "min": 8, "max": 140, "step": 1},
-        {"key": "size_min", "label": "Min Size", "type": "float", "default": 24, "min": 6, "max": 120, "step": 2},
-        {"key": "size_max", "label": "Max Size", "type": "float", "default": 140, "min": 20, "max": 420, "step": 5},
-        {"key": "blur", "label": "Blur", "type": "float", "default": 1.5, "min": 0.0, "max": 6.0, "step": 0.2},
-        {"key": "glow_radius", "label": "Glow Radius", "type": "float", "default": 8.0, "min": 0.0, "max": 20.0, "step": 0.5},
-        {"key": "glow_strength", "label": "Glow Strength", "type": "float", "default": 0.7, "min": 0.0, "max": 2.0, "step": 0.05},
-        {"key": "chromatic", "label": "Chromatic Shift", "type": "int", "default": 1, "min": 0, "max": 8, "step": 1},
-        {"key": "grain", "label": "Grain", "type": "float", "default": 0.04, "min": 0.0, "max": 0.25, "step": 0.01},
-        {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 8.0, "step": 0.05},
-        {"key": "speed", "label": "Speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05},
-        {"key": "motion_direction", "label": "Motion Direction", "type": "float", "default": 0.0, "min": -180.0, "max": 180.0, "step": 1.0},
-        {"key": "drift_x_cycles", "label": "Drift X Cycles", "type": "int", "default": 1, "min": 0, "max": 4, "step": 1},
-        {"key": "drift_y_cycles", "label": "Drift Y Cycles", "type": "int", "default": 0, "min": 0, "max": 4, "step": 1},
-        {"key": "tint_r", "label": "Tint R", "type": "float", "default": 0.95, "min": 0.6, "max": 1.4, "step": 0.02},
-        {"key": "tint_g", "label": "Tint G", "type": "float", "default": 0.98, "min": 0.6, "max": 1.4, "step": 0.02},
-        {"key": "tint_b", "label": "Tint B", "type": "float", "default": 1.05, "min": 0.6, "max": 1.6, "step": 0.02},
+        {"key": "count", "label": "Amount", "type": "int", "default": 45, "min": 4, "max": 400, "step": 1, "group": "shape", "pretty": [25, 90], "help": "Number of orbs."},
+        {"key": "size_min", "label": "Min Size", "type": "float", "default": 24.0, "min": 4.0, "max": 160.0, "step": 1.0, "group": "shape", "pretty": [12, 48], "help": "Radius of the smallest orbs (pixels at 1080p)."},
+        {"key": "size_max", "label": "Max Size", "type": "float", "default": 140.0, "min": 10.0, "max": 420.0, "step": 2.0, "group": "shape", "pretty": [80, 220], "help": "Radius of the largest orbs (pixels at 1080p)."},
+        {"key": "aperture", "label": "Aperture", "type": "choice", "default": "circle", "choices": ["circle", "hexagon", "heptagon", "octagon"], "group": "shape", "help": "Lens aperture shape."},
+        {"key": "rim", "label": "Rim", "type": "float", "default": 0.45, "min": 0.0, "max": 1.0, "step": 0.05, "group": "shape", "pretty": [0.2, 0.7], "help": "Bright lens edge on each orb."},
+        {"key": "opacity", "label": "Opacity", "type": "float", "default": 0.55, "min": 0.05, "max": 2.0, "step": 0.05, "group": "shape", "pretty": [0.4, 0.9], "help": "Transparency of the orbs."},
+        {"key": "speed", "label": "Drift Speed", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.05, "group": "motion", "pretty": [0.4, 1.5], "help": "How fast orbs drift."},
+        {"key": "motion_direction", "label": "Direction", "type": "float", "default": 180.0, "min": -180.0, "max": 180.0, "step": 1.0, "group": "motion", "unit": "deg", "help": "Main drift direction."},
+        {"key": "spread", "label": "Spread", "type": "float", "default": 0.8, "min": 0.0, "max": 1.0, "step": 0.05, "group": "motion", "help": "How much each orb's direction varies."},
+        {"key": "breathe", "label": "Breathe", "type": "float", "default": 0.3, "min": 0.0, "max": 1.0, "step": 0.05, "group": "motion", "help": "Gentle size and brightness pulsing."},
+        {"key": "palette", "label": "Palette", "type": "palette", "default": "sunset", "group": "color"},
+        {"key": "tint_r", "label": "Red Balance", "type": "float", "default": 1.0, "min": 0.4, "max": 1.6, "step": 0.02, "group": "color", "advanced": True},
+        {"key": "tint_g", "label": "Green Balance", "type": "float", "default": 1.0, "min": 0.4, "max": 1.6, "step": 0.02, "group": "color", "advanced": True},
+        {"key": "tint_b", "label": "Blue Balance", "type": "float", "default": 1.0, "min": 0.4, "max": 1.6, "step": 0.02, "group": "color", "advanced": True},
+        {"key": "blur", "label": "Softness", "type": "float", "default": 1.5, "min": 0.0, "max": 6.0, "step": 0.1, "group": "finish", "pretty": [0.6, 3.0], "help": "Edge softness of each orb."},
+        {"key": "chromatic", "label": "Colour Fringe", "type": "float", "default": 1.0, "min": 0.0, "max": 8.0, "step": 0.1, "group": "finish", "pretty": [0.0, 3.0], "help": "Chromatic aberration on orb edges."},
+        {"key": "glow_strength", "label": "Glow", "type": "float", "default": 0.6, "min": 0.0, "max": 3.0, "step": 0.05, "group": "finish", "pretty": [0.3, 1.2]},
+        {"key": "glow_radius", "label": "Glow Size", "type": "float", "default": 8.0, "min": 0.0, "max": 20.0, "step": 0.5, "group": "finish", "advanced": True},
+        {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 4.0, "step": 0.05, "group": "finish", "pretty": [0.9, 1.4]},
+        {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.25, "step": 0.01, "group": "finish", "advanced": True},
     ],
     "build_cache": build_cache,
     "render_frame": render_frame,
