@@ -5,6 +5,9 @@ __pycache__/
 _preview/
 _state.json
 *.mp4
+*.mov
+*__package.zip
+*__gumroad.zip
 *_thumb.png
 output/
 exports/

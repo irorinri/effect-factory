@@ -7,8 +7,20 @@ from .core import ensure_dir, read_json, write_json
 
 APP_DIR_NAME = "EffectFactory"
 
+
+def default_output_dir():
+    """Desktop/EffectFactory/exports, or a sensible fallback when the Desktop
+    folder lives elsewhere (e.g. redirected to OneDrive on Windows)."""
+    home = os.path.expanduser("~")
+    for folder in ("Desktop", "Videos", "Movies"):
+        base = os.path.join(home, folder)
+        if os.path.isdir(base):
+            return os.path.join(base, "EffectFactory", "exports")
+    return os.path.join(home, "EffectFactory", "exports")
+
+
 DEFAULT_SETTINGS = {
-    "output_dir": os.path.join(os.path.expanduser("~"), "Desktop", "EffectFactory", "exports"),
+    "output_dir": default_output_dir(),
     "file_prefix": "overlay",
     "ffmpeg_path": "",
     "encoder": "auto",
