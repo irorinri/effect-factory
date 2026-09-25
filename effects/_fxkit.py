@@ -708,7 +708,9 @@ def rgba_over(buf, layer):
 
 def _resize_channels(arr, size, resample):
     return np.stack([
-        np.asarray(Image.fromarray(np.ascontiguousarray(arr[..., c]), "F").resize(size, resample), dtype=np.float32)
+        # "F" images are float32: other dtypes would be misread as garbage.
+        np.asarray(Image.fromarray(np.ascontiguousarray(arr[..., c], dtype=np.float32), "F").resize(size, resample),
+                   dtype=np.float32)
         for c in range(arr.shape[2])
     ], axis=-1)
 
@@ -757,7 +759,7 @@ def chroma_fringe(buf, amount):
     for ch, sign in ((0, 1.0), (2, -1.0)):
         s = 1.0 + sign * px / diag
         inv = 1.0 / s
-        img = Image.fromarray(np.ascontiguousarray(buf[..., ch]), "F")
+        img = Image.fromarray(np.ascontiguousarray(buf[..., ch], dtype=np.float32), "F")
         img = img.transform((w, h), Image.AFFINE, (inv, 0.0, cx - cx * inv, 0.0, inv, cy - cy * inv), resample=BILINEAR)
         out[..., ch] = np.asarray(img, dtype=np.float32)
     return out

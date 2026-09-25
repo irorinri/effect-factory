@@ -1,0 +1,33 @@
+{
+  "name": "Prism Water",
+  "effect_id": "water_caustics",
+  "description": "White caustics split into rainbow edges.",
+  "tags": [
+    "rainbow",
+    "water",
+    "sparkle"
+  ],
+  "i18n": {
+    "ja": {
+      "name": "プリズムウォーター",
+      "description": "虹色のふちに分かれて輝く、白い光の網目。",
+      "tags": [
+        "虹",
+        "水",
+        "きらめき"
+      ]
+    }
+  },
+  "duration": 10.0,
+  "params": {
+    "palette": "white",
+    "dispersion": 0.7,
+    "focus": 1.2,
+    "scale": 1.3,
+    "speed": 0.8,
+    "glow": 0.6
+  },
+  "random": {
+    "base_seed": 23981
+  }
+}

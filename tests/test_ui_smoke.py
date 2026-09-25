@@ -48,9 +48,25 @@ class UISmokeTest(unittest.TestCase):
             app.undo()
             app.notebook.select(app.export_tab)
             pump(0.5)
+            # Switching theme and language rebuilds the widgets but keeps the work.
+            marker_count = len(app.timeline.markers)
+            self.assertTrue(app.apply_appearance(mode="light", language="ja"))
+            pump(0.8)
+            self.assertEqual(app.theme.mode, "light")
+            self.assertEqual(app.notebook.index(app.notebook.select()), 2)
+            self.assertEqual(len(app.timeline.markers), marker_count)
+            for name in ("Pool Caustics", "Cinematic Flares", "Pop Halftone"):
+                app.select_look(name)
+                pump(0.6)
+            self.assertEqual(app.toolbar.title.cget("text"), "ポップハーフトーン")
+            self.assertTrue(app.apply_appearance(mode="dark", language="en"))
+            pump(0.5)
+            self.assertEqual(app.toolbar.title.cget("text"), "Pop Halftone")
+            tk_errors = [line for line in app.log_lines if "[tk]" in line or "[error]" in line]
         finally:
             app.on_close()
         self.assertEqual(errors, [])
+        self.assertEqual(tk_errors, [])
 
 
 if __name__ == "__main__":

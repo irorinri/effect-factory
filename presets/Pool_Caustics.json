@@ -1,0 +1,36 @@
+{
+  "name": "Pool Caustics",
+  "effect_id": "water_caustics",
+  "description": "Blue light net dancing on the bottom of a pool.",
+  "tags": [
+    "water",
+    "pool",
+    "summer"
+  ],
+  "i18n": {
+    "ja": {
+      "name": "プールの光",
+      "description": "プールの底でゆらめく、青い光の網目。",
+      "tags": [
+        "水",
+        "プール",
+        "夏"
+      ]
+    }
+  },
+  "duration": 10.0,
+  "params": {
+    "palette": "ocean",
+    "scale": [
+      0.9,
+      1.2
+    ],
+    "focus": [
+      0.9,
+      1.1
+    ]
+  },
+  "random": {
+    "base_seed": 7719
+  }
+}

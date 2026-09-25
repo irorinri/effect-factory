@@ -1,0 +1,37 @@
+{
+  "name": "Mono Halftone Sweep",
+  "effect_id": "halftone_waves",
+  "description": "Minimal white dots sweeping diagonally.",
+  "tags": [
+    "mono",
+    "minimal",
+    "dots"
+  ],
+  "i18n": {
+    "ja": {
+      "name": "モノクロハーフトーン",
+      "description": "斜めに流れる、ミニマルな白いドット。",
+      "tags": [
+        "モノクロ",
+        "ミニマル",
+        "ドット"
+      ]
+    }
+  },
+  "duration": 8.0,
+  "params": {
+    "palette": "white",
+    "pattern": "sweep",
+    "lattice": "square",
+    "angle": 45.0,
+    "spacing": 20.0,
+    "contrast": 1.7,
+    "vignette": 0.2,
+    "color_mode": "wave",
+    "glow": 0.2,
+    "motion_direction": 45.0
+  },
+  "random": {
+    "base_seed": 9044
+  }
+}

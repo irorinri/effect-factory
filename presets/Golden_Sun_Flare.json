@@ -1,0 +1,37 @@
+{
+  "name": "Golden Sun Flare",
+  "effect_id": "anamorphic_flares",
+  "description": "One warm sun flare with a big halo and colourful ghosts.",
+  "tags": [
+    "sun",
+    "gold",
+    "warm"
+  ],
+  "i18n": {
+    "ja": {
+      "name": "ゴールデンサンフレア",
+      "description": "大きなハローと色とりどりのゴーストをともなう、夕日のような金色のフレア。",
+      "tags": [
+        "夕日",
+        "ゴールド",
+        "暖色"
+      ]
+    }
+  },
+  "duration": 10.0,
+  "params": {
+    "palette": "gold",
+    "sources": 1,
+    "size": 1.6,
+    "streak": 0.8,
+    "thickness": 1.4,
+    "halo": 0.8,
+    "ghosts": 1.3,
+    "speed": 0.3,
+    "wander": 0.35,
+    "intensity": 1.3
+  },
+  "random": {
+    "base_seed": 58213
+  }
+}

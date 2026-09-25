@@ -1,0 +1,32 @@
+{
+  "name": "Neon Interference",
+  "effect_id": "halftone_waves",
+  "description": "Two neon wave sources interfering on a dot screen.",
+  "tags": [
+    "neon",
+    "moire",
+    "dots"
+  ],
+  "i18n": {
+    "ja": {
+      "name": "ネオン干渉ドット",
+      "description": "ふたつのネオンの波が重なり合う、干渉模様のドット。",
+      "tags": [
+        "ネオン",
+        "モアレ",
+        "ドット"
+      ]
+    }
+  },
+  "duration": 8.0,
+  "params": {
+    "palette": "neon",
+    "pattern": "interference",
+    "spacing": 22.0,
+    "wavelength": 0.3,
+    "glow": 0.6
+  },
+  "random": {
+    "base_seed": 31337
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "Pop Halftone",
+  "effect_id": "halftone_waves",
+  "description": "Vaporwave dots swelling with ripples.",
+  "tags": [
+    "pop",
+    "y2k",
+    "dots"
+  ],
+  "i18n": {
+    "ja": {
+      "name": "ポップハーフトーン",
+      "description": "波紋に合わせてふくらむ、ヴェイパーカラーのドット。",
+      "tags": [
+        "ポップ",
+        "Y2K",
+        "ドット"
+      ]
+    }
+  },
+  "duration": 8.0,
+  "params": {
+    "palette": "vapor",
+    "pattern": "ripple",
+    "lattice": "hex"
+  },
+  "random": {
+    "base_seed": 6120
+  }
+}

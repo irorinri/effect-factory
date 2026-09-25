@@ -16,7 +16,7 @@ LOOKS = core.load_looks([(core.PRESETS_DIR, "builtin")])
 class PluginTests(unittest.TestCase):
     def test_plugins_load_without_errors(self):
         self.assertEqual(ERRORS, [])
-        self.assertGreaterEqual(len(PLUGINS), 14)
+        self.assertGreaterEqual(len(PLUGINS), 17)
 
     def test_param_descriptors_are_consistent(self):
         for plugin in PLUGINS.values():
@@ -46,7 +46,7 @@ class PluginTests(unittest.TestCase):
 
 class LookTests(unittest.TestCase):
     def test_every_look_is_valid(self):
-        self.assertGreaterEqual(len(LOOKS), 30)
+        self.assertGreaterEqual(len(LOOKS), 43)
         for name, look in LOOKS.items():
             with self.subTest(look=name):
                 plugin = PLUGINS.get(look["effect_id"])

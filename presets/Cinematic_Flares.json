@@ -1,0 +1,50 @@
+{
+  "name": "Cinematic Flares",
+  "effect_id": "anamorphic_flares",
+  "description": "Blue anamorphic streaks drifting like a sci-fi film.",
+  "tags": [
+    "cinematic",
+    "lens flare",
+    "blue"
+  ],
+  "i18n": {
+    "ja": {
+      "name": "シネマティックフレア",
+      "description": "青い光の筋が横に流れる、SF 映画のようなアナモルフィックフレア。",
+      "tags": [
+        "映画",
+        "レンズフレア",
+        "青"
+      ]
+    }
+  },
+  "duration": 10.0,
+  "params": {
+    "palette": "blue",
+    "sources": [
+      2,
+      3
+    ],
+    "streak": [
+      1.0,
+      1.4
+    ],
+    "ghosts": [
+      0.4,
+      0.8
+    ],
+    "halo": [
+      0.2,
+      0.45
+    ],
+    "speed": 0.45,
+    "thickness": [
+      1.1,
+      1.5
+    ],
+    "glow": 0.9
+  },
+  "random": {
+    "base_seed": 41027
+  }
+}
