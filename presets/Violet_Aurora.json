@@ -7,6 +7,17 @@
     "purple",
     "sky"
   ],
+  "i18n": {
+    "ja": {
+      "name": "バイオレットオーロラ",
+      "description": "強い光の筋をもつ、マゼンタから紫のオーロラ。",
+      "tags": [
+        "オーロラ",
+        "紫",
+        "空"
+      ]
+    }
+  },
   "duration": 12.0,
   "params": {
     "palette": "purple",

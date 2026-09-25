@@ -193,6 +193,21 @@ def _shooting_stars(buf, cache, clock, p, unit):
             splat(buf, sx + dx * d, sy + dy * d, (0.7 + 0.8 * (1.0 - f)) * unit, (0.9, 0.95, 1.0), a * 0.9)
 
 
+I18N = {"ja": {
+    "name": "星空 Pro",
+    "description": "視差・またたき・色付きの星雲・流れ星のある、深宇宙の星空。",
+    "params": {
+        "density": ("星の数", "星の多さ。"),
+        "star_size": ("星のサイズ",),
+        "nebula": ("星雲", "星の背後にある色付きのガス雲。"),
+        "shooting_stars": ("流れ星", "数秒あたりの流れ星の数。"),
+        "twinkle": ("またたき",),
+        "depth": ("視差", "近い星と遠い星の速度差。"),
+        "palette": ("星雲のパレット",),
+    },
+}}
+
+
 EFFECT = {
     "id": "starfield_pro",
     "name": "Starfield Pro",
@@ -215,6 +230,7 @@ EFFECT = {
         {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05, "group": "finish"},
         {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.25, "step": 0.01, "group": "finish", "advanced": True},
     ],
+    "i18n": I18N,
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

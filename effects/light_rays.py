@@ -131,6 +131,24 @@ def render_frame(cache, i):
     return finish(buf, exposure=max(0.0, float(p["brightness"])))
 
 
+I18N = {"ja": {
+    "name": "ライトレイ（ステージ／ライブ）",
+    "description": "ヘイズとフレアをともなって振れる、ステージ照明の立体的なビーム。",
+    "params": {
+        "count": ("ビームの数",),
+        "source": ("光源", "ライトを設置する位置。"),
+        "width": ("ビームの太さ",),
+        "spread": ("広がり角",),
+        "length": ("届く距離",),
+        "strength": ("強さ",),
+        "sweep": ("振り幅", "ビームが振れる大きさ。"),
+        "motion_direction": ("傾き", "ライト全体を傾けます。"),
+        "haze": ("ヘイズ", "ビームの中を漂うスモークの質感。"),
+    },
+    "choices": {"top": "上", "bottom": "下", "sides": "左右", "center": "中央"},
+}}
+
+
 EFFECT = {
     "id": "light_rays",
     "name": "Light Rays (Stage / Live)",
@@ -155,6 +173,7 @@ EFFECT = {
         {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05, "group": "finish"},
         {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.25, "step": 0.01, "group": "finish", "advanced": True},
     ],
+    "i18n": I18N,
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

@@ -7,6 +7,17 @@
     "love",
     "valentine"
   ],
+  "i18n": {
+    "ja": {
+      "name": "ラブハート",
+      "description": "ゆっくり昇っていくハート。",
+      "tags": [
+        "ハート",
+        "恋",
+        "バレンタイン"
+      ]
+    }
+  },
   "duration": 8.0,
   "params": {
     "palette": "magenta",

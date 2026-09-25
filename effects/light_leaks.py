@@ -114,6 +114,18 @@ def render_frame(cache, i):
     return finish(buf, exposure=max(0.0, float(p["brightness"])))
 
 
+I18N = {"ja": {
+    "name": "ライトリーク",
+    "description": "画面の端から漂い、呼吸し、ときどき光る、暖かなフィルムの光漏れ。",
+    "params": {
+        "count": ("光漏れの数",),
+        "edge_bias": ("端への寄り", "光漏れを画面の端に寄せます。"),
+        "flash": ("フラッシュ", "ときどき起こる露光フラッシュ。"),
+        "warmth": ("白飛び", "色を白っぽく飛ばします。"),
+    },
+}}
+
+
 EFFECT = {
     "id": "light_leaks",
     "name": "Light Leaks",
@@ -132,6 +144,7 @@ EFFECT = {
         {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05, "group": "finish"},
         {"key": "grain", "label": "Film Grain", "type": "float", "default": 0.03, "min": 0.0, "max": 0.25, "step": 0.01, "group": "finish"},
     ],
+    "i18n": I18N,
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

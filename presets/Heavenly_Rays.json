@@ -7,6 +7,17 @@
     "warm",
     "divine"
   ],
+  "i18n": {
+    "ja": {
+      "name": "天使のはしご",
+      "description": "上から降りそそぐ、やわらかな光芒。",
+      "tags": [
+        "光芒",
+        "暖色",
+        "神々しい"
+      ]
+    }
+  },
   "duration": 10.0,
   "params": {
     "source": "top",

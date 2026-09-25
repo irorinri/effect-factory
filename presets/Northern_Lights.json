@@ -7,6 +7,17 @@
     "night",
     "sky"
   ],
+  "i18n": {
+    "ja": {
+      "name": "オーロラ",
+      "description": "緑と紫のオーロラのカーテン。",
+      "tags": [
+        "オーロラ",
+        "夜",
+        "空"
+      ]
+    }
+  },
   "duration": 12.0,
   "params": {
     "palette": "aurora"

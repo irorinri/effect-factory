@@ -7,6 +7,7 @@ from tkinter import ttk
 import numpy as np
 from PIL import Image, ImageDraw
 
+from ..i18n import tr
 from .theme import C, SS, _LANCZOS, draw_icon, hex_rgb
 
 
@@ -71,7 +72,7 @@ class Tooltip:
             tw.attributes("-topmost", True)
         except tk.TclError:
             pass
-        tw.configure(bg=C["bg4"])
+        tw.configure(bg=C["tooltip_edge"])
         lbl = tk.Label(tw, text=text, bg=C["tooltip"], fg=C["text"], font=self.theme.fonts["small"],
                        justify="left", wraplength=S(300), padx=S(9), pady=S(6))
         lbl.pack(padx=1, pady=1)
@@ -170,7 +171,8 @@ class Slider(tk.Canvas):
     * ``dial=True`` adds a direction dial (angles)
     """
 
-    def __init__(self, master, theme, pdesc, value, on_change, on_commit=None, on_reset=None, dial=False, label=None):
+    def __init__(self, master, theme, pdesc, value, on_change, on_commit=None, on_reset=None, dial=False, label=None,
+                 help_text=None):
         S = theme.S
         super().__init__(master, height=S(50 if not dial else 54), bg=C["bg1"], highlightthickness=0, bd=0)
         self.t, self.pd = theme, pdesc
@@ -196,8 +198,9 @@ class Slider(tk.Canvas):
         self.bind("<ButtonRelease-1>", self._release)
         self.bind("<Double-Button-1>", self._reset)
         self.bind("<Motion>", self._cursor)
-        if pdesc.get("help"):
-            Tooltip(self, lambda: f"{pdesc.get('help')}\nDouble-click to reset · click the number to type.", theme, delay=900)
+        help_text = help_text if help_text is not None else pdesc.get("help")
+        if help_text:
+            Tooltip(self, tr("{help}\nDouble-click to reset · click the number to type.", help=help_text), theme, delay=900)
 
     # geometry -----------------------------------------------------------
     def _geom(self):
@@ -242,9 +245,10 @@ class Slider(tk.Canvas):
             d = ImageDraw.Draw(img)
             c = W / 2
             r = size * SS / 2
-            d.ellipse((c - r - SS, c - r + SS * 0.5, c + r + SS, c + r + SS * 2), fill=(0, 0, 0, 90))
+            d.ellipse((c - r - SS, c - r + SS * 0.5, c + r + SS, c + r + SS * 2), fill=(0, 0, 0, 90 if self.t.dark else 40))
             ring = hex_rgb(C["accent"]) if state == "drag" else (255, 255, 255, 255)
-            d.ellipse((c - r, c - r, c + r, c + r), fill=ring)
+            edge = hex_rgb(C["thumb_edge"]) if C["thumb_edge"] and state != "drag" else None
+            d.ellipse((c - r, c - r, c + r, c + r), fill=ring, outline=edge, width=SS if edge else 0)
             if state == "drag":
                 ri = r * 0.55
                 d.ellipse((c - ri, c - ri, c + ri, c + ri), fill=(255, 255, 255, 255))
@@ -429,7 +433,7 @@ class Slider(tk.Canvas):
         ent.bind("<FocusOut>", lambda _e: done(True))
 
 
-def palette_image(stops, w, h, r, ring=None, pad=0):
+def palette_image(stops, w, h, r, ring=None, pad=0, edge=(255, 255, 255, 40)):
     """Rounded horizontal gradient swatch (PIL RGBA)."""
     W, H, P = w * SS, h * SS, pad * SS
     img = Image.new("RGBA", (W + 2 * P, H + 2 * P), (0, 0, 0, 0))
@@ -443,7 +447,7 @@ def palette_image(stops, w, h, r, ring=None, pad=0):
     ImageDraw.Draw(mask).rounded_rectangle((0, 0, W - 1, H - 1), r * SS, fill=255)
     img.paste(gimg, (P, P), mask)
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle((P, P, P + W - 1, P + H - 1), r * SS, outline=(255, 255, 255, 40), width=SS)
+    d.rounded_rectangle((P, P, P + W - 1, P + H - 1), r * SS, outline=edge, width=SS)
     if ring:
         d.rounded_rectangle((SS, SS, W + 2 * P - SS, H + 2 * P - SS), (r + pad) * SS, outline=hex_rgb(ring), width=2 * SS)
     return img.resize(((W + 2 * P) // SS, (H + 2 * P) // SS), _LANCZOS)
@@ -471,7 +475,8 @@ class PaletteGrid(tk.Canvas):
     def _img(self, name, stops, state):
         ring = {"selected": C["accent"], "hover": C["text3"]}.get(state)
         return self.t.photo(("pal", name, state, self.sw, self.sh),
-                            lambda: palette_image(stops, self.sw, self.sh, self.t.S(6), ring=ring, pad=self.pad))
+                            lambda: palette_image(stops, self.sw, self.sh, self.t.S(6), ring=ring, pad=self.pad,
+                                                  edge=(255, 255, 255, 40) if self.t.dark else hex_rgb(C["edge"])))
 
     def redraw(self):
         self.delete("all")
@@ -546,7 +551,7 @@ class Segmented(tk.Canvas):
         S = self.t.S
         self.delete("all")
         w, h = max(10, self.winfo_width()), max(10, int(self.cget("height")))
-        bg = self.t.photo(("seg_bg", w, h), lambda: self.t.rounded(w, h, S(8), C["bg2"], C["line"]))
+        bg = self.t.photo(("seg_bg", w, h), lambda: self.t.rounded(w, h, S(8), C["bg2"], C["edge"]))
         self.create_image(0, 0, image=bg, anchor="nw")
         n = max(1, len(self.options))
         inner = w - S(6)
@@ -557,7 +562,7 @@ class Segmented(tk.Canvas):
             sel = val == self.value
             if sel:
                 pw, ph = max(4, x1 - x0), h - S(6)
-                pill = self.t.photo(("seg_sel", pw, ph), lambda pw=pw, ph=ph: self.t.rounded(pw, ph, S(6), C["bg4"]))
+                pill = self.t.photo(("seg_sel", pw, ph), lambda pw=pw, ph=ph: self.t.rounded(pw, ph, S(6), C["seg_sel"], C["seg_sel_edge"] or None))
                 self.create_image(x0, S(3), image=pill, anchor="nw")
             color = C["text"] if sel else (C["text"] if val == self.hovered else C["text2"])
             if not self.enabled:
@@ -633,7 +638,7 @@ class NumberField(tk.Canvas):
         S = self.t.S
         self.delete("all")
         w, h = max(10, self.winfo_width()), max(10, self.winfo_height())
-        border = C["accent"] if self._drag else (C["bg4"] if self.hover else C["line"])
+        border = C["accent"] if self._drag else (C["bg4"] if self.hover else C["edge"])
         bg = self.t.photo(("nf", w, h, border), lambda: self.t.rounded(w, h, S(7), C["bg2"], border))
         self.create_image(0, 0, image=bg, anchor="nw")
         self.create_text(w / 2, h / 2, text=self.fmt.format(self.value) + self.suffix, fill=C["text"], font=self.t.fonts["bold"])
@@ -674,7 +679,7 @@ class NumberField(tk.Canvas):
             self.on_change(v)
 
     def set(self, v):
-        self.value = self._clamp(v)
+        self.value = min(self.hi, max(self.lo, float(v)))  # show external values as they are (no step snap)
         self.redraw()
 
     def _edit(self):

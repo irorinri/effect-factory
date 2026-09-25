@@ -7,6 +7,17 @@
     "cyberpunk",
     "rain"
   ],
+  "i18n": {
+    "ja": {
+      "name": "ネオンレイン",
+      "description": "ネオンカラーに光る、サイバーパンクな雨。",
+      "tags": [
+        "ネオン",
+        "サイバーパンク",
+        "雨"
+      ]
+    }
+  },
   "duration": 6.0,
   "params": {
     "palette": "neon",

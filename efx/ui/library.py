@@ -5,6 +5,7 @@ from tkinter import ttk
 
 from PIL import Image, ImageDraw, ImageOps
 
+from ..i18n import tr
 from .theme import C, SS, _LANCZOS, hex_rgb
 from .widgets import FlowFrame, ScrollArea, Tooltip
 
@@ -80,7 +81,7 @@ class LookCard(tk.Canvas):
             self._photos[key] = photo
         self.create_image(0, 0, image=photo, anchor="nw")
         if self.thumb_src is None:
-            self.create_text(self.tw / 2, self.th / 2, text="rendering…", fill=C["text3"], font=self.t.fonts["tiny"])
+            self.create_text(self.tw / 2, self.th / 2, text=tr("rendering…"), fill=C["text3"], font=self.t.fonts["tiny"])
         f = self.t.fonts
         title = self.item["name"]
         font = f["small_bold"]
@@ -91,11 +92,11 @@ class LookCard(tk.Canvas):
         sub = self.item.get("subtitle", "")
         self.create_text(S(2), self.th + S(32), text=sub, anchor="w", fill=C["text3"], font=f["tiny"])
         if self.item.get("source") == "user":
-            self.create_text(self.tw - S(4), self.th + S(32), text="★ mine", anchor="e", fill=C["accent_hi"], font=f["tiny"])
+            self.create_text(self.tw - S(4), self.th + S(32), text=tr("★ mine"), anchor="e", fill=C["accent_hi"], font=f["tiny"])
 
 
 class LibraryPanel(ttk.Frame):
-    def __init__(self, master, theme, on_select, on_context):
+    def __init__(self, master, theme, on_select, on_context, thumbs=None):
         super().__init__(master)
         self.t = theme
         self.on_select_cb = on_select
@@ -104,12 +105,12 @@ class LibraryPanel(ttk.Frame):
         self.cards = {}
         self.selected = None
         self.filter = "All"
-        self.thumbs = {}
+        self.thumbs = thumbs if thumbs is not None else {}  # shared with the app (survives UI rebuilds)
         S = theme.S
 
         head = ttk.Frame(self)
         head.pack(fill="x", padx=S(14), pady=(S(14), S(8)))
-        ttk.Label(head, text="Library", style="Title.TLabel").pack(side="left")
+        ttk.Label(head, text=tr("Library"), style="Title.TLabel").pack(side="left")
         self.count_lbl = ttk.Label(head, text="", style="Faint.TLabel")
         self.count_lbl.pack(side="left", padx=(S(8), 0), pady=(S(3), 0))
 
@@ -129,14 +130,14 @@ class LibraryPanel(ttk.Frame):
         self.chips.pack(fill="x", padx=S(14), pady=(S(10), S(6)))
         self.chip_buttons = {}
         for name in CHIPS:
-            btn = ttk.Button(self.chips, text=name, style="Chip.TButton", command=lambda n=name: self.set_filter(n))
+            btn = ttk.Button(self.chips, text=tr(name), style="Chip.TButton", command=lambda n=name: self.set_filter(n))
             self.chip_buttons[name] = btn
 
         self.scroll = ScrollArea(self, theme)
         self.scroll.pack(fill="both", expand=True, padx=(S(10), S(4)), pady=(S(4), S(10)))
         self.grid_frame = self.scroll.interior
         self.scroll.canvas.bind("<Configure>", lambda e: self.after_idle(self._layout), add="+")
-        self.empty = ttk.Label(self.grid_frame, text="No looks match your search.", style="Faint.TLabel")
+        self.empty = ttk.Label(self.grid_frame, text=tr("No looks match your search."), style="Faint.TLabel")
         self._last_width = None
         self.set_filter("All", notify=False)
 
@@ -145,7 +146,7 @@ class LibraryPanel(ttk.Frame):
         if not self.search_var.get():
             self._placeholder = True
             self.search.configure(foreground=C["text3"])
-            self.search_var.set("Search looks…")
+            self.search_var.set(tr("Search looks…"))
 
     def _clear_placeholder(self, _e=None):
         if self._placeholder:
@@ -193,6 +194,12 @@ class LibraryPanel(ttk.Frame):
 
     def reveal_selected(self):
         """Scroll the grid so the selected card is visible."""
+        try:
+            self._reveal()
+        except tk.TclError:  # panel destroyed (theme/language switch)
+            pass
+
+    def _reveal(self):
         card = self.cards.get(self.selected)
         if card is None or not card.winfo_ismapped():
             # Cards are laid out lazily; try again shortly (bounded).
@@ -225,7 +232,7 @@ class LibraryPanel(ttk.Frame):
                 continue
             if self.filter not in ("All", "Mine") and item.get("category") != self.filter:
                 continue
-            hay = " ".join(str(item.get(k, "")) for k in ("name", "subtitle", "category", "tags", "description")).lower()
+            hay = " ".join(str(item.get(k, "")) for k in ("name", "subtitle", "category", "tags", "description", "search")).lower()
             if q and not all(part in hay for part in q.split()):
                 continue
             out.append(item)
@@ -237,7 +244,7 @@ class LibraryPanel(ttk.Frame):
         self._layout()
         total = len(self.items)
         shown = len(self._visible)
-        self.count_lbl.configure(text=f"{shown} of {total}" if shown != total else f"{total} looks")
+        self.count_lbl.configure(text=tr("{shown} of {total}", shown=shown, total=total) if shown != total else tr("{total} looks", total=total))
 
     def _layout(self):
         S = self.t.S

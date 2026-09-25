@@ -219,6 +219,32 @@ def render_frame(cache, i):
     return finish(buf, exposure=brightness, knee=0.92)
 
 
+I18N = {"ja": {
+    "name": "紙吹雪 Pro",
+    "description": "奥行きのあるレイヤーで舞う、カラフルな紙吹雪・リボン・ハート・花びら。",
+    "params": {
+        "density": ("量", "降ってくる紙吹雪の量。"),
+        "shape": ("形", "紙片・丸・リボン・星・ハート・花びら。"),
+        "size": ("サイズ", "ひとつひとつの大きさ。"),
+        "layers": ("奥行きレイヤー", "増やすと遠くとカメラの近くにも紙吹雪が加わります。"),
+        "motion_direction": ("方向", "0 = 下へ落ちる、180 = 上へ昇る。"),
+        "spin": ("回転",),
+        "shimmer": ("きらめき", "裏返るときのメタリックな輝き。"),
+        "mblur_samples": ("モーションブラー", "モーションブラー用のサブフレーム数。"),
+        "blur_far": ("奥のぼかし",),
+        "blur_mid": ("中間のぼかし",),
+        "blur_near": ("手前のぼかし",),
+    },
+    "choices": {"mixed": "ミックス",
+     "paper": "紙片",
+     "circles": "丸",
+     "ribbons": "リボン",
+     "stars": "星",
+     "hearts": "ハート",
+     "petals": "花びら"},
+}}
+
+
 EFFECT = {
     "id": "confetti_pro",
     "name": "Confetti Pro",
@@ -244,6 +270,7 @@ EFFECT = {
         {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 2.5, "step": 0.05, "group": "finish"},
         {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.2, "step": 0.01, "group": "finish", "advanced": True},
     ],
+    "i18n": I18N,
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

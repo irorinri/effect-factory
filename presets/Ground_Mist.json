@@ -7,6 +7,17 @@
     "ground",
     "white"
   ],
+  "i18n": {
+    "ja": {
+      "name": "地表の霧",
+      "description": "画面の下にまとわりつく白い霧。",
+      "tags": [
+        "霧",
+        "地面",
+        "白"
+      ]
+    }
+  },
   "duration": 12.0,
   "params": {
     "tint": "cool",

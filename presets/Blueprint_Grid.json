@@ -7,6 +7,17 @@
     "tech",
     "blue"
   ],
+  "i18n": {
+    "ja": {
+      "name": "設計図グリッド",
+      "description": "ゆっくりスライドする、落ち着いたテック系グリッド。",
+      "tags": [
+        "グリッド",
+        "テック",
+        "青"
+      ]
+    }
+  },
   "duration": 8.0,
   "params": {
     "palette": "cool",

@@ -103,6 +103,17 @@ def render_frame(cache, i):
     return finish(buf, exposure=max(0.0, float(p["brightness"])))
 
 
+I18N = {"ja": {
+    "name": "降雪",
+    "description": "奥行きのある雪。カメラの近くには大きくぼけた雪片も舞います。",
+    "params": {
+        "size": ("雪片のサイズ",),
+        "depth": ("手前の雪", "カメラ近くの大きくぼけた雪片。"),
+        "motion_direction": ("風", "0 = 真下。"),
+    },
+}}
+
+
 EFFECT = {
     "id": "snowfall",
     "name": "Snowfall",
@@ -123,6 +134,7 @@ EFFECT = {
         {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05, "group": "finish"},
         {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.25, "step": 0.01, "group": "finish", "advanced": True},
     ],
+    "i18n": I18N,
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

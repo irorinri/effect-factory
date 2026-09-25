@@ -7,6 +7,17 @@
     "neon",
     "club"
   ],
+  "i18n": {
+    "ja": {
+      "name": "ネオンスモーク",
+      "description": "ネオンカラーで渦巻くカラフルな煙。",
+      "tags": [
+        "煙",
+        "ネオン",
+        "クラブ"
+      ]
+    }
+  },
   "duration": 10.0,
   "params": {
     "tint": "neon",

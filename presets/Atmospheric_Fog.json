@@ -7,6 +7,17 @@
     "mist",
     "blue"
   ],
+  "i18n": {
+    "ja": {
+      "name": "ブルーフォグ",
+      "description": "画面をゆっくり流れる、ひんやりとした青い霧。",
+      "tags": [
+        "霧",
+        "もや",
+        "青"
+      ]
+    }
+  },
   "duration": 12.0,
   "params": {
     "tint": "blue",

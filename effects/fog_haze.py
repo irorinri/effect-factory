@@ -108,6 +108,20 @@ def render_frame(cache, i):
     return finish(buf, exposure=max(0.0, float(p["brightness"])))
 
 
+I18N = {"ja": {
+    "name": "フォグ・ヘイズ",
+    "description": "漂いながら形を変える、やわらかく立体的な霧。パレットで色を付けられます。",
+    "params": {
+        "strength": ("濃さ", "霧の濃さ。"),
+        "contrast": ("コントラスト", "晴れ間と濃い雲の差。"),
+        "scale": ("雲の大きさ", "霧のかたまりの大きさ。"),
+        "detail": ("細かさ", "細かく繊細な霧の量。"),
+        "ground": ("地表の霧", "霧を画面の下の方に集めます。"),
+        "evolve": ("変化", "霧の形が変わる速さ。"),
+    },
+}}
+
+
 EFFECT = {
     "id": "fog_haze",
     "name": "Fog Haze",
@@ -129,6 +143,7 @@ EFFECT = {
         {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05, "group": "finish"},
         {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.25, "step": 0.01, "group": "finish", "advanced": True},
     ],
+    "i18n": I18N,
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

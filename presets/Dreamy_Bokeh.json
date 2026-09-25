@@ -7,6 +7,17 @@
     "warm",
     "romantic"
   ],
+  "i18n": {
+    "ja": {
+      "name": "ドリーミーボケ",
+      "description": "ゆっくり昇っていく、暖かなピンぼけの光。",
+      "tags": [
+        "ボケ",
+        "暖色",
+        "ロマンチック"
+      ]
+    }
+  },
   "duration": 10.0,
   "params": {
     "palette": "sunset",

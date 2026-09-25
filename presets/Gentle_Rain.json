@@ -7,6 +7,17 @@
     "calm",
     "blue"
   ],
+  "i18n": {
+    "ja": {
+      "name": "やさしい雨",
+      "description": "やわらかな粒の、斜めに降る小雨。",
+      "tags": [
+        "雨",
+        "穏やか",
+        "青"
+      ]
+    }
+  },
   "duration": 6.0,
   "params": {
     "palette": "ice",

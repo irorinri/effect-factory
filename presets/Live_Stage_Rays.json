@@ -7,6 +7,17 @@
     "concert",
     "lights"
   ],
+  "i18n": {
+    "ja": {
+      "name": "ライブステージ",
+      "description": "ヘイズの中を振れる、コンサートのスポットライト。",
+      "tags": [
+        "ステージ",
+        "コンサート",
+        "照明"
+      ]
+    }
+  },
   "duration": 6.0,
   "params": {
     "color": {

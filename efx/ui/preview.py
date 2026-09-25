@@ -5,6 +5,7 @@ from tkinter import ttk
 
 from PIL import ImageTk
 
+from ..i18n import tr
 from .theme import C
 from .widgets import NumberField, Segmented, Tooltip, icon_button
 
@@ -68,7 +69,7 @@ class PreviewCanvas(tk.Canvas):
         if self._photo is not None:
             self.create_image(x0 + fw // 2, y0 + fh // 2, image=self._photo)
         else:
-            self.create_text(x0 + fw / 2, y0 + fh / 2, text="Preparing preview…", fill=C["text3"], font=f["base"])
+            self.create_text(x0 + fw / 2, y0 + fh / 2, text=tr("Preparing preview…"), fill=C["text3"], font=f["base"])
         if self.info:
             self._chip(x0 + S(10), y0 + S(10), self.info, "nw")
         if self.status:
@@ -129,8 +130,8 @@ class TimelineCanvas(tk.Canvas):
         self.bind("<ButtonRelease-1>", self._release)
         self.bind("<Button-3>", self._context)
         self.bind("<Button-2>", self._context)
-        Tooltip(self, "Click or drag to scrub. Drag a marker to the right to hold its look (xx / yy / zz); "
-                      "Shift+drag moves a marker; right-click removes it.", theme, delay=1200)
+        Tooltip(self, lambda: tr("Click or drag to scrub. Drag a marker to the right to hold its look (xx / yy / zz); "
+                                 "Shift+drag moves a marker; right-click removes it."), theme, delay=1200)
 
     def _bounds(self):
         S = self.t.S
@@ -171,7 +172,7 @@ class TimelineCanvas(tk.Canvas):
         xf = self.app.crossfade_seconds()
         if xf > 0:
             self.create_rectangle(a, y - S(9), self.t2x(xf), y + S(9), fill=C["accent_dim"], outline="")
-            self.create_text(a + S(4), y + S(17), text="loop blend", anchor="w", fill=C["text3"], font=f["tiny"])
+            self.create_text(a + S(4), y + S(17), text=tr("loop blend"), anchor="w", fill=C["text3"], font=f["tiny"])
         playhead = self.t2x(self.app.playhead)
         self.create_rectangle(a, y - th // 2, playhead, y + th // 2, fill=C["accent"], outline="")
         # hold ranges
@@ -244,9 +245,9 @@ class TimelineCanvas(tk.Canvas):
             return
         menu = tk.Menu(self, tearoff=0)
         base = self.app.timeline.base_label(label)
-        menu.add_command(label=f"Remove marker {base}", command=lambda: self.app.delete_marker(base))
+        menu.add_command(label=tr("Remove marker {m}", m=base), command=lambda: self.app.delete_marker(base))
         if self.app.timeline.hold_label(base) in self.app.timeline.markers:
-            menu.add_command(label=f"Remove hold {base.lower() * 2}", command=lambda: self.app.remove_hold(base))
+            menu.add_command(label=tr("Remove hold {m}", m=base.lower() * 2), command=lambda: self.app.remove_hold(base))
         menu.tk_popup(e.x_root, e.y_root)
 
 
@@ -257,20 +258,20 @@ class TransportBar(ttk.Frame):
         super().__init__(master)
         S = theme.S
         self.t, self.app = theme, app
-        self.play_btn = icon_button(self, theme, "play", app.toggle_play, "Play / pause (Space)", style="Accent.TButton", size=16, color="#ffffff")
+        self.play_btn = icon_button(self, theme, "play", app.toggle_play, tr("Play / pause (Space)"), style="Accent.TButton", size=16, color="#ffffff")
         self.play_btn.pack(side="left")
-        icon_button(self, theme, "start", lambda: app.seek(0.0), "Back to start (Home)").pack(side="left", padx=(S(4), 0))
+        icon_button(self, theme, "start", lambda: app.seek(0.0), tr("Back to start (Home)")).pack(side="left", padx=(S(4), 0))
         self.time_lbl = ttk.Label(self, text="0:00.00", font=theme.fonts["mono"], width=17)
         self.time_lbl.pack(side="left", padx=(S(10), S(4)))
-        ttk.Label(self, text="Loop", style="Muted.TLabel").pack(side="left", padx=(S(8), S(6)))
+        ttk.Label(self, text=tr("Loop"), style="Muted.TLabel").pack(side="left", padx=(S(8), S(6)))
         self.duration = NumberField(self, theme, app.duration, app.on_duration_drag, lo=1.0, hi=120.0, step=0.5,
                                     fmt="{:.1f}", suffix=" s", on_commit=app.on_duration_commit)
         self.duration.pack(side="left")
-        Tooltip(self.duration, "Loop length. Drag sideways or double-click to type.", theme)
+        Tooltip(self.duration, tr("Loop length. Drag sideways or double-click to type."), theme)
         self.loop_var = tk.BooleanVar(value=app.loop)
-        cb = ttk.Checkbutton(self, text="Seamless", style="Switch.TCheckbutton", variable=self.loop_var, command=lambda: app.set_loop(self.loop_var.get()))
+        cb = ttk.Checkbutton(self, text=tr("Seamless"), style="Switch.TCheckbutton", variable=self.loop_var, command=lambda: app.set_loop(self.loop_var.get()))
         cb.pack(side="left", padx=(S(12), 0))
-        Tooltip(cb, "Make the clip loop seamlessly. Effects that cannot loop natively get a short cross-fade.", theme)
+        Tooltip(cb, tr("Make the clip loop seamlessly. Effects that cannot loop natively get a short cross-fade."), theme)
         self.loop_hint = ttk.Label(self, text="", style="Faint.TLabel")
         self.loop_hint.pack(side="left", padx=(S(10), 0))
 
@@ -292,24 +293,25 @@ class PreviewToolbar(ttk.Frame):
         super().__init__(master)
         S = theme.S
         self.t = theme
+        # The switches are packed first so a long title is clipped instead of overlapping them.
+        right = ttk.Frame(self)
+        right.pack(side="right", padx=(S(10), 0))
         left = ttk.Frame(self)
         left.pack(side="left", fill="x", expand=True)
         self.title = ttk.Label(left, text="", style="Title.TLabel")
         self.title.pack(side="left")
         self.subtitle = ttk.Label(left, text="", style="Faint.TLabel")
         self.subtitle.pack(side="left", padx=(S(10), 0), pady=(S(3), 0))
-        right = ttk.Frame(self)
-        right.pack(side="right")
-        self.backdrop = Segmented(right, theme, [("black", "Black"), ("dusk", "Scene"), ("image", "Image…")],
+        self.backdrop = Segmented(right, theme, [("black", tr("Black")), ("dusk", tr("Scene")), ("image", tr("Image…"))],
                                   app.preview_background, app.set_preview_background)
         self.backdrop.configure(width=S(186))
         self.backdrop.pack(side="left")
-        Tooltip(self.backdrop, "Preview the overlay Screen-blended over a backdrop.\nExports are always black-background (or transparent).", theme)
-        self.quality = Segmented(right, theme, [("draft", "Draft"), ("balanced", "Good"), ("full", "Full")],
+        Tooltip(self.backdrop, tr("Preview the overlay Screen-blended over a backdrop.\nExports are always black-background (or transparent)."), theme)
+        self.quality = Segmented(right, theme, [("draft", tr("Draft")), ("balanced", tr("Good")), ("full", tr("Full"))],
                                  app.preview_quality, app.set_preview_quality)
         self.quality.configure(width=S(160))
         self.quality.pack(side="left", padx=(S(8), 0))
-        Tooltip(self.quality, "Preview resolution. Draft is fastest; Full renders at display resolution.", theme)
+        Tooltip(self.quality, tr("Preview resolution. Draft is fastest; Full renders at display resolution."), theme)
 
 
 class MarkerBar(ttk.Frame):
@@ -317,19 +319,20 @@ class MarkerBar(ttk.Frame):
         super().__init__(master)
         S = theme.S
         self.t, self.app = theme, app
-        ttk.Label(self, text="Timeline", style="Bold.TLabel").pack(side="left")
+        ttk.Label(self, text=tr("Timeline"), style="Bold.TLabel").pack(side="left")
         self.buttons = []
         for label in app.timeline.MARKERS:
             b = ttk.Button(self, text=f"+ {label}", style="Chip.TButton", width=4, command=lambda m=label: app.save_marker(m))
             b.pack(side="left", padx=(S(6) if label == "X" else S(4), 0))
-            Tooltip(b, f"Save the current look as marker {label} at the playhead ({'123'[app.timeline.MARKERS.index(label)]}).", theme)
+            Tooltip(b, tr("Save the current look as marker {m} at the playhead (key {key}).", m=label,
+                          key="123"[app.timeline.MARKERS.index(label)]), theme)
             self.buttons.append(b)
-        self.clear_btn = ttk.Button(self, text="Clear", style="Chip.TButton", command=app.clear_markers)
+        self.clear_btn = ttk.Button(self, text=tr("Clear"), style="Chip.TButton", command=app.clear_markers)
         self.clear_btn.pack(side="left", padx=(S(8), 0))
         self.wrap_var = tk.BooleanVar(value=app.wrap_markers)
-        wrap = ttk.Checkbutton(self, text="Blend back to start", style="Switch.TCheckbutton", variable=self.wrap_var,
+        wrap = ttk.Checkbutton(self, text=tr("Blend back to start"), style="Switch.TCheckbutton", variable=self.wrap_var,
                                command=lambda: app.set_wrap_markers(self.wrap_var.get()))
         wrap.pack(side="left", padx=(S(14), 0))
-        Tooltip(wrap, "When looping, the last marker blends back into the first one.", theme)
+        Tooltip(wrap, tr("When looping, the last marker blends back into the first one."), theme)
         self.status = ttk.Label(self, text="", style="Faint.TLabel")
         self.status.pack(side="right")

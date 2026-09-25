@@ -7,6 +7,8 @@ from PIL import ImageOps, ImageTk
 
 from ..core import GROUP_ORDER, GROUP_TITLES, guess_group
 from ..export import ENCODER_LABELS, FORMATS
+from .. import i18n
+from ..i18n import tr
 from .theme import C, _LANCZOS
 from .widgets import (FlowFrame, NumberField, PaletteGrid, ScrollArea, Segmented, Slider, Tooltip, icon_button,
                       section_header)
@@ -23,6 +25,15 @@ SIZE_PRESETS = [
 
 def _pretty_choice(value):
     return str(value).replace("_", " ").capitalize()
+
+
+def _text_width(text):
+    """Rough width in Latin characters (CJK glyphs count double)."""
+    return sum(2 if ord(ch) >= 0x2E80 else 1 for ch in str(text))
+
+
+def _choice_label(plugin, pdesc, value):
+    return i18n.choice_label(plugin, pdesc, value) if plugin is not None else _pretty_choice(value)
 
 
 class AdjustTab(ttk.Frame):
@@ -50,22 +61,23 @@ class AdjustTab(ttk.Frame):
 
         head = ttk.Frame(body)
         head.pack(fill="x", padx=pad, pady=(S(14), S(4)))
-        self.name_lbl = ttk.Label(head, text=plugin.name, style="Title.TLabel")
+        self.name_lbl = ttk.Label(head, text=i18n.effect_name(plugin), style="Title.TLabel")
         self.name_lbl.pack(anchor="w")
         self.look_lbl = ttk.Label(head, text="", style="Small.TLabel")
         self.look_lbl.pack(anchor="w", pady=(S(2), 0))
-        if plugin.description:
-            desc = ttk.Label(head, text=plugin.description, style="Faint.TLabel", justify="left")
+        description = i18n.effect_description(plugin)
+        if description:
+            desc = ttk.Label(head, text=description, style="Faint.TLabel", justify="left")
             desc.pack(anchor="w", fill="x", pady=(S(6), 0))
             head.bind("<Configure>", lambda e, d=desc: d.configure(wraplength=max(100, e.width - S(4))))
 
         actions = ttk.Frame(body)
         actions.pack(fill="x", padx=pad, pady=(S(10), S(4)))
-        b = icon_button(actions, self.t, "save", app.save_look_dialog, "Save these settings as your own look (Ctrl+S)", style="TButton", text="Save look", size=14)
+        b = icon_button(actions, self.t, "save", app.save_look_dialog, tr("Save these settings as your own look (Ctrl+S)"), style="TButton", text=tr("Save look"), size=14)
         b.pack(side="left")
-        b = icon_button(actions, self.t, "reset", app.reset_params, "Reset every parameter back to the look", style="TButton", text="Reset", size=14)
+        b = icon_button(actions, self.t, "reset", app.reset_params, tr("Reset every parameter back to the look"), style="TButton", text=tr("Reset"), size=14)
         b.pack(side="left", padx=(S(6), 0))
-        b = icon_button(actions, self.t, "dice", app.surprise, "Surprise me: tasteful random tweak (R)", style="TButton", text="Surprise", size=14)
+        b = icon_button(actions, self.t, "dice", app.surprise, tr("Surprise me: tasteful random tweak (R)"), style="TButton", text=tr("Surprise"), size=14)
         b.pack(side="left", padx=(S(6), 0))
 
         if plugin.asset:
@@ -87,7 +99,7 @@ class AdjustTab(ttk.Frame):
             items = [p for p in groups[group] if show_adv or not p.get("advanced")]
             if not items:
                 continue
-            section_header(body, self.t, GROUP_TITLES.get(group, group.title())).pack(fill="x", padx=pad, pady=(S(18), S(4)))
+            section_header(body, self.t, tr(GROUP_TITLES.get(group, group.title()))).pack(fill="x", padx=pad, pady=(S(18), S(4)))
             for p in items:
                 self._control(body, p, pad)
 
@@ -95,7 +107,7 @@ class AdjustTab(ttk.Frame):
         if adv_count:
             row = ttk.Frame(body)
             row.pack(fill="x", padx=pad, pady=(S(16), S(4)))
-            ttk.Checkbutton(row, text=f"Show advanced ({adv_count})", style="Switch.TCheckbutton", variable=app.show_advanced,
+            ttk.Checkbutton(row, text=tr("Show advanced ({n})", n=adv_count), style="Switch.TCheckbutton", variable=app.show_advanced,
                             command=app.rebuild_inspector).pack(side="left")
         ttk.Frame(body, height=S(24)).pack(fill="x")
         self.refresh()
@@ -104,7 +116,7 @@ class AdjustTab(ttk.Frame):
     def _asset_section(self, body, plugin, pad):
         S = self.t.S
         spec = plugin.asset
-        section_header(body, self.t, spec.get("label", "Asset")).pack(fill="x", padx=pad, pady=(S(18), S(6)))
+        section_header(body, self.t, i18n.asset_text(plugin, "label", spec.get("label", "Asset"))).pack(fill="x", padx=pad, pady=(S(18), S(6)))
         row = FlowFrame(body, gap=S(6))
         row.pack(fill="x", padx=pad)
         self.asset_buttons = {}
@@ -118,12 +130,12 @@ class AdjustTab(ttk.Frame):
                     img = self._asset_icon(pil)
                 except Exception:
                     img = None
-            btn = ttk.Button(row, text=choice.get("label", ""), image=img, compound="top", style="Chip.TButton",
+            btn = ttk.Button(row, text=i18n.asset_choice(plugin, token, choice.get("label", "")), image=img, compound="top", style="Chip.TButton",
                              command=lambda t=token: self.app.set_asset(t))
             btn.image = img
             self.asset_buttons[token] = btn
-        custom = ttk.Button(row, text="Custom PNG…", style="Chip.TButton", command=self.app.choose_asset_file)
-        Tooltip(custom, spec.get("hint", "Use any transparent PNG."), self.t)
+        custom = ttk.Button(row, text=tr("Custom PNG…"), style="Chip.TButton", command=self.app.choose_asset_file)
+        Tooltip(custom, i18n.asset_text(plugin, "hint", spec.get("hint", "Use any transparent PNG.")), self.t)
         self.asset_lbl = ttk.Label(body, text="", style="Faint.TLabel")
         self.asset_lbl.pack(fill="x", padx=pad, pady=(S(4), 0))
 
@@ -146,7 +158,7 @@ class AdjustTab(ttk.Frame):
 
         def right(row):
             name_lbl.pack(in_=row, side="right")
-        section_header(body, self.t, p.get("label", "Palette"), right=right).pack(fill="x", padx=pad, pady=(S(18), S(8)))
+        section_header(body, self.t, i18n.param_label(self._plugin, p), right=right).pack(fill="x", padx=pad, pady=(S(18), S(8)))
         palettes = [(n, [tuple(c) for c in palette_stops(n)]) for n in PALETTE_NAMES]
         cur = self.app.values.get(key, p.get("default"))
 
@@ -162,7 +174,7 @@ class AdjustTab(ttk.Frame):
         if lbl is None:
             return
         cur = self.app.values.get(key)
-        text = str(hovered or cur or "").capitalize()
+        text = i18n.palette_label(hovered or cur or "")
         lbl.configure(text=text, style="Small.TLabel" if hovered is None else "Bold.TLabel")
 
     def _control(self, body, p, pad):
@@ -174,26 +186,27 @@ class AdjustTab(ttk.Frame):
         if ptype in ("float", "int"):
             dial = p.get("unit") == "deg" and key in ("motion_direction", "arc_rotation", "grid_rotation")
             w = Slider(body, self.t, p, value, app.on_param_change, on_commit=app.on_param_commit,
-                       on_reset=app.on_param_reset, dial=dial)
+                       on_reset=app.on_param_reset, dial=dial, label=i18n.param_label(self._plugin, p),
+                       help_text=i18n.param_help(self._plugin, p))
             w.pack(fill="x", padx=pad - S(8) + S(2), pady=(0, 0))
             self.controls[key] = w
         elif ptype == "choice":
             choices = list(p.get("choices") or [])
             row = ttk.Frame(body)
             row.pack(fill="x", padx=pad, pady=(S(6), S(6)))
-            lbl = ttk.Label(row, text=p.get("label", key), style="Muted.TLabel")
+            lbl = ttk.Label(row, text=i18n.param_label(self._plugin, p), style="Muted.TLabel")
             lbl.pack(anchor="w", pady=(0, S(4)))
             if p.get("help"):
-                Tooltip(lbl, p["help"], self.t)
-            short = len(choices) <= 4 and all(len(str(c)) <= 9 for c in choices)
+                Tooltip(lbl, i18n.param_help(self._plugin, p), self.t)
+            labels = [_choice_label(self._plugin, p, c) for c in choices]
+            short = len(choices) <= 4 and all(_text_width(c) <= 9 for c in labels)
             if short:
-                seg = Segmented(row, self.t, [(c, _pretty_choice(c)) for c in choices], str(value),
+                seg = Segmented(row, self.t, list(zip(choices, labels)), str(value),
                                 lambda v, k=key: app.on_param_commit(k, v))
                 seg.pack(fill="x")
                 self.controls[key] = seg
             else:
-                var = tk.StringVar(value=_pretty_choice(value))
-                labels = [_pretty_choice(c) for c in choices]
+                var = tk.StringVar(value=_choice_label(self._plugin, p, value))
                 cb = ttk.Combobox(row, textvariable=var, values=labels, state="readonly")
                 cb.pack(fill="x")
 
@@ -206,7 +219,7 @@ class AdjustTab(ttk.Frame):
                 self.controls[key] = cb
         elif ptype == "bool":
             var = tk.BooleanVar(value=bool(value))
-            cb = ttk.Checkbutton(body, text=p.get("label", key), style="Switch.TCheckbutton", variable=var,
+            cb = ttk.Checkbutton(body, text=i18n.param_label(self._plugin, p), style="Switch.TCheckbutton", variable=var,
                                  command=lambda k=key, v=var: app.on_param_commit(k, bool(v.get())))
             cb.pack(anchor="w", padx=pad, pady=S(6))
             cb._var = var
@@ -231,14 +244,14 @@ class AdjustTab(ttk.Frame):
             elif isinstance(ctrl, Segmented):
                 ctrl.set(str(value))
             elif isinstance(ctrl, ttk.Combobox):
-                ctrl._var.set(_pretty_choice(value))
+                ctrl._var.set(_choice_label(self._plugin, pmap.get(key, {}), value))
             elif isinstance(ctrl, ttk.Checkbutton):
                 ctrl._var.set(bool(value))
         look = app.look_name
-        text = f"Look · {look}" if look else "Custom (no look)"
+        text = tr("Look · {name}", name=app.look_title()) if look else tr("Custom (no look)")
         edits = len([k for k in app.overrides if k in pmap])
         if edits:
-            text += f"  ·  {edits} edited"
+            text += tr("  ·  {n} edited", n=edits)
         if hasattr(self, "look_lbl") and self.look_lbl.winfo_exists():
             self.look_lbl.configure(text=text)
         if getattr(self, "asset_buttons", None) and self._plugin.asset:
@@ -260,20 +273,20 @@ class ExploreTab(ttk.Frame):
         body = self.scroll.interior
         pad = S(16)
 
-        section_header(body, theme, "Surprise me").pack(fill="x", padx=pad, pady=(S(16), S(8)))
-        btn = icon_button(body, theme, "dice", app.surprise, "Randomise tastefully (R)", style="Accent.TButton",
-                          text="  Surprise me", size=16, color="#ffffff")
+        section_header(body, theme, tr("Surprise me")).pack(fill="x", padx=pad, pady=(S(16), S(8)))
+        btn = icon_button(body, theme, "dice", app.surprise, tr("Randomise tastefully (R)"), style="Accent.TButton",
+                          text="  " + tr("Surprise me"), size=16, color="#ffffff")
         btn.pack(fill="x", padx=pad)
-        self.strength = Segmented(body, theme, [("subtle", "Subtle"), ("balanced", "Balanced"), ("wild", "Wild")],
+        self.strength = Segmented(body, theme, [("subtle", tr("Subtle")), ("balanced", tr("Balanced")), ("wild", tr("Wild"))],
                                   app.random_strength, app.set_random_strength)
         self.strength.pack(fill="x", padx=pad, pady=(S(8), S(6)))
         locks = ttk.Frame(body)
         locks.pack(fill="x", padx=pad, pady=(S(2), 0))
-        for key, label in (("color", "Keep colours"), ("shape", "Keep shape"), ("motion", "Keep motion")):
+        for key, label in (("color", tr("Keep colours")), ("shape", tr("Keep shape")), ("motion", tr("Keep motion"))):
             ttk.Checkbutton(locks, text=label, style="Switch.TCheckbutton", variable=app.lock_vars[key]).pack(anchor="w", pady=S(2))
 
-        head = section_header(body, theme, "Variations", right=lambda row: icon_button(
-            row, theme, "reset", app.shuffle_variations, "New suggestions", text="Shuffle", size=12).pack(in_=row, side="right", padx=(S(6), 0)))
+        head = section_header(body, theme, tr("Variations"), right=lambda row: icon_button(
+            row, theme, "reset", app.shuffle_variations, tr("New suggestions"), text=tr("Shuffle"), size=12).pack(in_=row, side="right", padx=(S(6), 0)))
         head.pack(fill="x", padx=pad, pady=(S(20), S(8)))
         self.var_grid = ttk.Frame(body)
         self.var_grid.pack(fill="x", padx=pad)
@@ -290,29 +303,29 @@ class ExploreTab(ttk.Frame):
         self.var_grid.columnconfigure(0, weight=1, uniform="v")
         self.var_grid.columnconfigure(1, weight=1, uniform="v")
         self.var_grid.bind("<Configure>", lambda _e: self._size_cells())
-        ttk.Label(body, text="Click a variation to apply it. Undo with Ctrl+Z.", style="Faint.TLabel").pack(anchor="w", padx=pad)
+        ttk.Label(body, text=tr("Click a variation to apply it. Undo with Ctrl+Z."), style="Faint.TLabel").pack(anchor="w", padx=pad)
 
-        section_header(body, theme, "Seed & variation").pack(fill="x", padx=pad, pady=(S(20), S(8)))
+        section_header(body, theme, tr("Seed & variation")).pack(fill="x", padx=pad, pady=(S(20), S(8)))
         row = ttk.Frame(body)
         row.pack(fill="x", padx=pad)
-        icon_button(row, theme, "left", lambda: app.step_variant(-1), "Previous variation", style="TButton", size=14).pack(side="left")
+        icon_button(row, theme, "left", lambda: app.step_variant(-1), tr("Previous variation"), style="TButton", size=14).pack(side="left")
         self.variant_lbl = ttk.Label(row, text="#1", style="Bold.TLabel", width=6, anchor="center")
         self.variant_lbl.pack(side="left", padx=S(4))
-        icon_button(row, theme, "right", lambda: app.step_variant(1), "Next variation", style="TButton", size=14).pack(side="left")
+        icon_button(row, theme, "right", lambda: app.step_variant(1), tr("Next variation"), style="TButton", size=14).pack(side="left")
         seed_box = ttk.Frame(row)
         seed_box.pack(side="right")
-        ttk.Label(seed_box, text="Seed", style="Muted.TLabel").pack(side="left", padx=(0, S(6)))
+        ttk.Label(seed_box, text=tr("Seed"), style="Muted.TLabel").pack(side="left", padx=(0, S(6)))
         self.seed_var = tk.StringVar(value=str(app.base_seed))
         ent = ttk.Entry(seed_box, textvariable=self.seed_var, width=10)
         ent.pack(side="left")
         ent.bind("<Return>", lambda _e: app.set_base_seed(self.seed_var.get()))
         ent.bind("<FocusOut>", lambda _e: app.set_base_seed(self.seed_var.get()))
-        ttk.Checkbutton(body, text="New variation after each export", style="Switch.TCheckbutton",
+        ttk.Checkbutton(body, text=tr("New variation after each export"), style="Switch.TCheckbutton",
                         variable=app.randomize_each_export).pack(anchor="w", padx=pad, pady=(S(8), 0))
-        ttk.Label(body, text="Looks with ranges pick new values per variation; the seed also reshuffles particles.",
+        ttk.Label(body, text=tr("Looks with ranges pick new values per variation; the seed also reshuffles particles."),
                   style="Faint.TLabel", wraplength=S(320), justify="left").pack(anchor="w", padx=pad, pady=(S(4), 0))
 
-        section_header(body, theme, "History").pack(fill="x", padx=pad, pady=(S(20), S(8)))
+        section_header(body, theme, tr("History")).pack(fill="x", padx=pad, pady=(S(20), S(8)))
         self.history = tk.Listbox(body, height=8, bg=C["bg2"], fg=C["text2"], selectbackground=C["accent_dim"],
                                   selectforeground=C["text"], activestyle="none", relief="flat", highlightthickness=0,
                                   font=theme.fonts["small"], borderwidth=0)
@@ -383,18 +396,18 @@ class ExportTab(ttk.Frame):
         pad = S(16)
         st = app.settings
 
-        section_header(body, theme, "Frame").pack(fill="x", padx=pad, pady=(S(16), S(8)))
-        self.size_seg = Segmented(body, theme, [(k, lbl) for k, lbl, _ in SIZE_PRESETS], st.get("size_preset", "1080p"),
+        section_header(body, theme, tr("Frame")).pack(fill="x", padx=pad, pady=(S(16), S(8)))
+        self.size_seg = Segmented(body, theme, [(k, tr(lbl)) for k, lbl, _ in SIZE_PRESETS], st.get("size_preset", "1080p"),
                                   app.set_size_preset)
         self.size_seg.pack(fill="x", padx=pad)
         row = ttk.Frame(body)
         row.pack(fill="x", padx=pad, pady=(S(8), 0))
-        ttk.Label(row, text="W", style="Muted.TLabel").pack(side="left")
-        self.w_field = NumberField(row, theme, app.out_w, lambda v: None, lo=64, hi=7680, step=16, fmt="{:.0f}",
+        ttk.Label(row, text=tr("W"), style="Muted.TLabel").pack(side="left")
+        self.w_field = NumberField(row, theme, app.out_w, lambda v: None, lo=64, hi=7680, step=8, fmt="{:.0f}",
                                    on_commit=lambda v: app.set_custom_size(w=v))
         self.w_field.pack(side="left", padx=(S(6), S(10)))
-        ttk.Label(row, text="H", style="Muted.TLabel").pack(side="left")
-        self.h_field = NumberField(row, theme, app.out_h, lambda v: None, lo=64, hi=7680, step=16, fmt="{:.0f}",
+        ttk.Label(row, text=tr("H"), style="Muted.TLabel").pack(side="left")
+        self.h_field = NumberField(row, theme, app.out_h, lambda v: None, lo=64, hi=7680, step=8, fmt="{:.0f}",
                                    on_commit=lambda v: app.set_custom_size(h=v))
         self.h_field.pack(side="left", padx=(S(6), S(10)))
         self.fps_seg = Segmented(row, theme, [(24, "24"), (30, "30"), (60, "60")], app.out_fps, app.set_fps)
@@ -402,34 +415,35 @@ class ExportTab(ttk.Frame):
         self.fps_seg.pack(side="right")
         ttk.Label(row, text="fps", style="Muted.TLabel").pack(side="right", padx=(0, S(6)))
 
-        section_header(body, theme, "Loop").pack(fill="x", padx=pad, pady=(S(18), S(8)))
+        section_header(body, theme, tr("Loop")).pack(fill="x", padx=pad, pady=(S(18), S(8)))
         row = ttk.Frame(body)
         row.pack(fill="x", padx=pad)
-        ttk.Label(row, text="Cross-fade", style="Muted.TLabel").pack(side="left")
+        ttk.Label(row, text=tr("Cross-fade"), style="Muted.TLabel").pack(side="left")
         self.xf_field = NumberField(row, theme, app.crossfade, app.set_crossfade, lo=0.1, hi=4.0, step=0.1, fmt="{:.1f}", suffix=" s")
         self.xf_field.pack(side="left", padx=(S(8), 0))
         self.loop_hint = ttk.Label(body, text="", style="Faint.TLabel", wraplength=S(320), justify="left")
         self.loop_hint.pack(anchor="w", padx=pad, pady=(S(6), 0))
 
-        section_header(body, theme, "File").pack(fill="x", padx=pad, pady=(S(18), S(8)))
-        self.fmt_seg = Segmented(body, theme, [("mp4", "MP4"), ("mov_alpha", "MOV + alpha"), ("png", "PNG seq")],
+        section_header(body, theme, tr("File")).pack(fill="x", padx=pad, pady=(S(18), S(8)))
+        self.fmt_seg = Segmented(body, theme, [("mp4", "MP4"), ("mov_alpha", tr("MOV + alpha")), ("png", tr("PNG seq"))],
                                  st.get("format", "mp4"), app.set_format)
         self.fmt_seg.pack(fill="x", padx=pad)
         self.fmt_hint = ttk.Label(body, text="", style="Faint.TLabel", wraplength=S(320), justify="left")
         self.fmt_hint.pack(anchor="w", padx=pad, pady=(S(6), S(8)))
-        ttk.Label(body, text="Quality", style="Muted.TLabel").pack(anchor="w", padx=pad)
-        self.q_seg = Segmented(body, theme, [("draft", "Draft"), ("standard", "Standard"), ("high", "High"), ("max", "Max")],
+        ttk.Label(body, text=tr("Quality"), style="Muted.TLabel").pack(anchor="w", padx=pad)
+        self.q_seg = Segmented(body, theme, [("draft", tr("Draft")), ("standard", tr("Standard")), ("high", tr("High")), ("max", tr("Max"))],
                                st.get("quality", "high"), app.set_quality)
         self.q_seg.pack(fill="x", padx=pad, pady=(S(4), S(8)))
         row = ttk.Frame(body)
         row.pack(fill="x", padx=pad)
-        ttk.Label(row, text="Encoder", style="Muted.TLabel").pack(side="left")
+        ttk.Label(row, text=tr("Encoder"), style="Muted.TLabel").pack(side="left")
         self.enc_var = tk.StringVar()
         self.enc_cb = ttk.Combobox(row, textvariable=self.enc_var, state="readonly", width=24)
         self.enc_cb.pack(side="right")
-        self.enc_cb.bind("<<ComboboxSelected>>", lambda _e: app.set_encoder_label(self.enc_var.get()))
+        self.enc_keys = ["auto"]
+        self.enc_cb.bind("<<ComboboxSelected>>", lambda _e: app.set_encoder(self.enc_keys[max(0, self.enc_cb.current())]))
 
-        section_header(body, theme, "Output").pack(fill="x", padx=pad, pady=(S(18), S(8)))
+        section_header(body, theme, tr("Output")).pack(fill="x", padx=pad, pady=(S(18), S(8)))
         row = ttk.Frame(body)
         row.pack(fill="x", padx=pad)
         self.out_var = tk.StringVar(value=st.get("output_dir", ""))
@@ -437,11 +451,11 @@ class ExportTab(ttk.Frame):
         ent.pack(side="left", fill="x", expand=True)
         ent.bind("<FocusOut>", lambda _e: app.set_output_dir(self.out_var.get()))
         ent.bind("<Return>", lambda _e: app.set_output_dir(self.out_var.get()))
-        icon_button(row, theme, "folder", app.browse_output_dir, "Choose folder", style="TButton", size=14).pack(side="left", padx=(S(6), 0))
-        icon_button(row, theme, "export", app.open_output_dir, "Open the output folder", style="TButton", size=14).pack(side="left", padx=(S(4), 0))
+        icon_button(row, theme, "folder", app.browse_output_dir, tr("Choose folder"), style="TButton", size=14).pack(side="left", padx=(S(6), 0))
+        icon_button(row, theme, "export", app.open_output_dir, tr("Open the output folder"), style="TButton", size=14).pack(side="left", padx=(S(4), 0))
         row = ttk.Frame(body)
         row.pack(fill="x", padx=pad, pady=(S(8), 0))
-        ttk.Label(row, text="File prefix", style="Muted.TLabel").pack(side="left")
+        ttk.Label(row, text=tr("File prefix"), style="Muted.TLabel").pack(side="left")
         self.prefix_var = tk.StringVar(value=st.get("file_prefix", "overlay"))
         pe = ttk.Entry(row, textvariable=self.prefix_var, width=16)
         pe.pack(side="right")
@@ -449,18 +463,18 @@ class ExportTab(ttk.Frame):
         row = ttk.Frame(body)
         row.pack(fill="x", padx=pad, pady=(S(8), 0))
         ttk.Label(row, text="ffmpeg", style="Muted.TLabel").pack(side="left")
-        icon_button(row, theme, "folder", app.browse_ffmpeg, "Locate ffmpeg", style="TButton", size=14).pack(side="right", padx=(S(6), 0))
+        icon_button(row, theme, "folder", app.browse_ffmpeg, tr("Locate ffmpeg"), style="TButton", size=14).pack(side="right", padx=(S(6), 0))
         self.ff_var = tk.StringVar(value=st.get("ffmpeg_path", ""))
         fe = ttk.Entry(row, textvariable=self.ff_var)
         fe.pack(side="right", fill="x", expand=True, padx=(S(10), 0))
         fe.bind("<FocusOut>", lambda _e: app.set_ffmpeg_path(self.ff_var.get()))
         fe.bind("<Return>", lambda _e: app.set_ffmpeg_path(self.ff_var.get()))
-        self.ff_status = ttk.Label(body, text="Looking for ffmpeg…", style="Faint.TLabel", wraplength=S(320), justify="left")
+        self.ff_status = ttk.Label(body, text=tr("Looking for ffmpeg…"), style="Faint.TLabel", wraplength=S(320), justify="left")
         self.ff_status.pack(anchor="w", padx=pad, pady=(S(6), 0))
 
-        section_header(body, theme, "Render").pack(fill="x", padx=pad, pady=(S(18), S(10)))
-        self.export_btn = icon_button(body, theme, "export", app.export, "Render the full clip (Ctrl+E)", style="Accent.TButton",
-                                      text="  Export video", size=16, color="#ffffff")
+        section_header(body, theme, tr("Render")).pack(fill="x", padx=pad, pady=(S(18), S(10)))
+        self.export_btn = icon_button(body, theme, "export", app.export, tr("Render the full clip (Ctrl+E)"), style="Accent.TButton",
+                                      text="  " + tr("Export video"), size=16, color="#ffffff")
         self.export_btn.pack(fill="x", padx=pad)
         self.summary = ttk.Label(body, text="", style="Faint.TLabel")
         self.summary.pack(anchor="w", padx=pad, pady=(S(6), S(8)))
@@ -468,13 +482,13 @@ class ExportTab(ttk.Frame):
         grid.pack(fill="x", padx=pad)
         grid.columnconfigure(0, weight=1, uniform="a")
         grid.columnconfigure(1, weight=1, uniform="a")
-        self.draft_btn = icon_button(grid, theme, "film", app.export_draft, "Quick half-resolution MP4 to check timing", style="TButton", text="Draft MP4", size=14)
+        self.draft_btn = icon_button(grid, theme, "film", app.export_draft, tr("Quick half-resolution MP4 to check timing"), style="TButton", text=tr("Draft MP4"), size=14)
         self.draft_btn.grid(row=0, column=0, sticky="ew", padx=(0, S(4)), pady=(0, S(6)))
-        self.still_btn = icon_button(grid, theme, "image", app.export_still, "Save the frame under the playhead as a PNG", style="TButton", text="Still PNG", size=14)
+        self.still_btn = icon_button(grid, theme, "image", app.export_still, tr("Save the frame under the playhead as a PNG"), style="TButton", text=tr("Still PNG"), size=14)
         self.still_btn.grid(row=0, column=1, sticky="ew", padx=(S(4), 0), pady=(0, S(6)))
-        self.zip_btn = icon_button(grid, theme, "save", app.make_zip, "Bundle the last export with README / LICENSE for asset stores", style="TButton", text="ZIP package", size=14)
+        self.zip_btn = icon_button(grid, theme, "save", app.make_zip, tr("Bundle the last export with README / LICENSE for asset stores"), style="TButton", text=tr("ZIP package"), size=14)
         self.zip_btn.grid(row=1, column=0, sticky="ew", padx=(0, S(4)))
-        self.cmd_btn = icon_button(grid, theme, "copy", app.copy_command, "Copy the ffmpeg command line", style="TButton", text="Copy command", size=14)
+        self.cmd_btn = icon_button(grid, theme, "copy", app.copy_command, tr("Copy the ffmpeg command line"), style="TButton", text=tr("Copy command"), size=14)
         self.cmd_btn.grid(row=1, column=1, sticky="ew", padx=(S(4), 0))
         self.last_lbl = ttk.Label(body, text="", style="Faint.TLabel", wraplength=S(320), justify="left", cursor="hand2")
         self.last_lbl.pack(anchor="w", padx=pad, pady=(S(10), S(20)))
@@ -491,16 +505,18 @@ class ExportTab(ttk.Frame):
         self.xf_field.set(app.crossfade)
         fmt = st.get("format", "mp4")
         self.fmt_seg.set(fmt)
-        self.fmt_hint.configure(text=FORMATS.get(fmt, FORMATS["mp4"])["hint"])
+        self.fmt_hint.configure(text=tr(FORMATS.get(fmt, FORMATS["mp4"])["hint"]))
         self.q_seg.set(st.get("quality", "high"))
         encs = app.available_encoders
-        labels = [f"Auto ({ENCODER_LABELS.get(app.auto_encoder(), app.auto_encoder())})"] + [ENCODER_LABELS.get(e, e) for e in encs]
+        labels = [tr("Auto ({encoder})", encoder=ENCODER_LABELS.get(app.auto_encoder(), app.auto_encoder()))] + [ENCODER_LABELS.get(e, e) for e in encs]
+        self.enc_keys = ["auto", *encs]
         self.enc_cb.configure(values=labels, state="readonly" if fmt == "mp4" else "disabled")
         cur = st.get("encoder", "auto")
         self.enc_var.set(labels[0] if cur == "auto" or cur not in encs else ENCODER_LABELS.get(cur, cur))
         self.loop_hint.configure(text=app.loop_hint_text())
         frames = int(round(app.out_fps * app.duration))
-        self.summary.configure(text=f"{app.out_w}×{app.out_h} · {app.out_fps} fps · {app.duration:.1f} s · {frames} frames")
+        self.summary.configure(text=tr("{w}×{h} · {fps} fps · {sec} s · {frames} frames", w=app.out_w, h=app.out_h, fps=app.out_fps,
+                                        sec=f"{app.duration:.1f}", frames=frames))
 
     def set_busy(self, busy):
         state = "disabled" if busy else "normal"

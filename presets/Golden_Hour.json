@@ -7,6 +7,17 @@
     "sunset",
     "warm"
   ],
+  "i18n": {
+    "ja": {
+      "name": "ゴールデンアワー",
+      "description": "夕暮れの輝きのような、大きくやわらかな金色の玉ボケ。",
+      "tags": [
+        "ゴールド",
+        "夕焼け",
+        "暖色"
+      ]
+    }
+  },
   "duration": 12.0,
   "params": {
     "palette": "gold",

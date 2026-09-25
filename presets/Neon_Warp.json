@@ -7,6 +7,17 @@
     "warp",
     "speed"
   ],
+  "i18n": {
+    "ja": {
+      "name": "ネオンワープ",
+      "description": "密集したネオンの光の筋が駆け抜ける。",
+      "tags": [
+        "ネオン",
+        "ワープ",
+        "スピード"
+      ]
+    }
+  },
   "duration": 4.0,
   "params": {
     "palette": "neon",

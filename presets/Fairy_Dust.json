@@ -7,6 +7,17 @@
     "magic",
     "dreamy"
   ],
+  "i18n": {
+    "ja": {
+      "name": "フェアリーダスト",
+      "description": "あらゆる方向に漂う、やわらかなパステルの光の粒。",
+      "tags": [
+        "パステル",
+        "魔法",
+        "ドリーミー"
+      ]
+    }
+  },
   "duration": 10.0,
   "params": {
     "palette": "pastel",

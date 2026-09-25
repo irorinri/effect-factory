@@ -7,6 +7,17 @@
     "anime",
     "impact"
   ],
+  "i18n": {
+    "ja": {
+      "name": "マンガ集中線",
+      "description": "中心を囲む、定番のマンガ集中線。",
+      "tags": [
+        "マンガ",
+        "アニメ",
+        "インパクト"
+      ]
+    }
+  },
   "duration": 4.0,
   "params": {
     "count": 180,

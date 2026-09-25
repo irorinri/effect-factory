@@ -7,6 +7,17 @@
     "celebration",
     "rainbow"
   ],
+  "i18n": {
+    "ja": {
+      "name": "紙吹雪ライブ",
+      "description": "メタリックに輝く、レインボーのパーティー紙吹雪。",
+      "tags": [
+        "パーティー",
+        "お祝い",
+        "レインボー"
+      ]
+    }
+  },
   "duration": 8.0,
   "params": {
     "palette": "rainbow",

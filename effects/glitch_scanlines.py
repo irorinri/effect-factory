@@ -129,6 +129,20 @@ def render_frame(cache, i):
     return finish(buf, exposure=max(0.0, float(p["brightness"])))
 
 
+I18N = {"ja": {
+    "name": "グリッチ走査線",
+    "description": "VHS のロールバー、ノイズ帯、デジタルブロック、映像の裂け、RGB ずれ。",
+    "params": {
+        "scanlines": ("走査線", "細かな走査線と流れる VHS バー。"),
+        "noise": ("ノイズ帯",),
+        "blocks": ("デジタルブロック",),
+        "tear_prob": ("映像の裂け",),
+        "burstiness": ("緩急", "静かな時間と激しいグリッチのメリハリ。"),
+        "chromatic": ("RGB ずれ",),
+    },
+}}
+
+
 EFFECT = {
     "id": "glitch_scanlines",
     "name": "Glitch Scanlines",
@@ -149,6 +163,7 @@ EFFECT = {
         {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05, "group": "finish"},
         {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.25, "step": 0.01, "group": "finish", "advanced": True},
     ],
+    "i18n": I18N,
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

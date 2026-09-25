@@ -7,6 +7,17 @@
     "night",
     "nature"
   ],
+  "i18n": {
+    "ja": {
+      "name": "ホタル",
+      "description": "夜の中をゆっくりさまよう、大きく光る粒。",
+      "tags": [
+        "緑",
+        "夜",
+        "自然"
+      ]
+    }
+  },
   "duration": 10.0,
   "params": {
     "palette": "forest",

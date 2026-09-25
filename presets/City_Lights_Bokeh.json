@@ -8,6 +8,18 @@
     "night",
     "hexagon"
   ],
+  "i18n": {
+    "ja": {
+      "name": "街明かりのボケ",
+      "description": "夜の街のような、六角形のネオンボケ。",
+      "tags": [
+        "ネオン",
+        "街",
+        "夜",
+        "六角形"
+      ]
+    }
+  },
   "duration": 10.0,
   "params": {
     "palette": "neon",

@@ -8,6 +8,18 @@
     "japan",
     "petals"
   ],
+  "i18n": {
+    "ja": {
+      "name": "桜の花びら",
+      "description": "そよ風に舞う桜の花びら。",
+      "tags": [
+        "ピンク",
+        "春",
+        "日本",
+        "花びら"
+      ]
+    }
+  },
   "duration": 10.0,
   "params": {
     "palette": "sakura",

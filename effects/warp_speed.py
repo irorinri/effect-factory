@@ -105,6 +105,16 @@ def render_frame(cache, i):
     return finish(buf, exposure=max(0.0, float(p["brightness"])))
 
 
+I18N = {"ja": {
+    "name": "ワープスピード",
+    "description": "光る消失点から飛び出してくる、ハイパースペースの光の筋。",
+    "params": {
+        "length": ("筋の長さ",),
+        "tunnel": ("中心の光", "消失点の輝き。"),
+    },
+}}
+
+
 EFFECT = {
     "id": "warp_speed",
     "name": "Warp Speed",
@@ -124,6 +134,7 @@ EFFECT = {
         {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05, "group": "finish"},
         {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.25, "step": 0.01, "group": "finish", "advanced": True},
     ],
+    "i18n": I18N,
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

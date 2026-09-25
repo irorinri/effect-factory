@@ -7,6 +7,17 @@
     "winter",
     "christmas"
   ],
+  "i18n": {
+    "ja": {
+      "name": "しんしんと降る雪",
+      "description": "カメラの近くにぼけた雪片が舞う、静かな雪。",
+      "tags": [
+        "雪",
+        "冬",
+        "クリスマス"
+      ]
+    }
+  },
   "duration": 10.0,
   "params": {
     "palette": "white",

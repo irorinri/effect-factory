@@ -1,8 +1,11 @@
-"""Dark theme for Tk/ttk.
+"""Dark and light themes for Tk/ttk.
 
 Tk cannot anti-alias rounded shapes on every platform, so every rounded
 surface (buttons, fields, tabs, switches, scrollbars ...) is rendered with
 Pillow at 4x and down-sampled, then registered as ttk image elements.
+
+``C`` is the active palette.  Modules import it once, so switching themes
+updates it in place (see :func:`set_mode`).
 """
 
 import math
@@ -18,13 +21,14 @@ try:
 except AttributeError:  # pragma: no cover
     _LANCZOS = Image.LANCZOS
 
-C = {
+DARK = {
     "bg0": "#0b0d12",
     "bg1": "#13161e",
     "bg2": "#1b1f2a",
     "bg3": "#262b39",
     "bg4": "#323949",
     "line": "#232837",
+    "edge": "#232837",
     "text": "#e9ecf3",
     "text2": "#a3abbe",
     "text3": "#6d7590",
@@ -37,7 +41,63 @@ C = {
     "bad": "#ff6b7a",
     "preview": "#050608",
     "tooltip": "#262b3b",
+    "tooltip_edge": "#323949",
+    "btn": "#262b39",
+    "btn_hover": "#323949",
+    "btn_press": "#1b1f2a",
+    "btn_edge": "",
+    "track": "#262b39",
+    "track_hover": "#323949",
+    "thumb_edge": "",
+    "seg_sel": "#323949",
+    "seg_sel_edge": "",
+    "tab_sel": "#262b39",
+    "tab_sel_edge": "#323949",
 }
+
+LIGHT = {
+    "bg0": "#e4e7ee",
+    "bg1": "#fbfbfd",
+    "bg2": "#f1f3f7",
+    "bg3": "#e6e9f0",
+    "bg4": "#d3d8e3",
+    "line": "#e3e6ed",
+    "edge": "#d3d8e2",
+    "text": "#161a24",
+    "text2": "#4b5366",
+    "text3": "#8a92a5",
+    "accent": "#6a5af0",
+    "accent_hi": "#8174ff",
+    "accent_lo": "#5645de",
+    "accent_dim": "#e6e2ff",
+    "good": "#0c9a74",
+    "warn": "#b06f0a",
+    "bad": "#d63d55",
+    "preview": "#050608",
+    "tooltip": "#ffffff",
+    "tooltip_edge": "#cfd5e1",
+    "btn": "#ffffff",
+    "btn_hover": "#f3f4f8",
+    "btn_press": "#e8ebf1",
+    "btn_edge": "#d3d8e2",
+    "track": "#c9cfdb",
+    "track_hover": "#b9c0ce",
+    "thumb_edge": "#c5ccd8",
+    "seg_sel": "#ffffff",
+    "seg_sel_edge": "#d3d8e2",
+    "tab_sel": "#eceef4",
+    "tab_sel_edge": "#d3d8e2",
+}
+
+THEMES = {"dark": DARK, "light": LIGHT}
+C = dict(DARK)
+
+
+def set_mode(mode):
+    """Switch the shared palette ``C`` in place."""
+    C.clear()
+    C.update(THEMES.get(mode, DARK))
+
 
 SS = 4  # supersampling for generated images
 
@@ -55,21 +115,49 @@ def mix(a, b, t):
 class Theme:
     """Fonts, scaling, generated images and ttk styles."""
 
-    def __init__(self, root):
+    LATIN_FONTS = ["Segoe UI Variable Text", "Segoe UI", "SF Pro Text", "Helvetica Neue", "Inter", "Noto Sans",
+                   "Ubuntu", "Cantarell", "DejaVu Sans"]
+    # Japanese UI fonts (Latin glyphs included), best first per platform.
+    JAPANESE_FONTS = ["Meiryo UI", "Yu Gothic UI", "Meiryo", "Hiragino Sans", "Hiragino Kaku Gothic ProN",
+                      "Noto Sans CJK JP", "Noto Sans JP", "Source Han Sans JP", "IPAexGothic", "IPAPGothic",
+                      "TakaoPGothic", "VL PGothic", "IPAGothic"]
+
+    def __init__(self, root, mode="dark", language="en"):
         self.root = root
         try:
             dpi = float(root.winfo_fpixels("1i"))
         except Exception:
             dpi = 96.0
         self.scale = max(1.0, dpi / 96.0)
-        self._images = {}
-        self._build_fonts()
+        self._images = {}  # (mode, key) -> PhotoImage for widgets
+        self._elements = {}  # key -> PhotoImage used by ttk elements (repainted in place)
+        self.fonts = {}
+        self.mode = None
+        self.language = language
         self.style = ttk.Style(root)
         try:
             self.style.theme_use("clam")
         except tk.TclError:
             pass
+        self.apply(mode, language)
+
+    def apply(self, mode, language=None):
+        """(Re)build fonts, element images and styles for a theme/language."""
+        mode = "light" if mode == "light" else "dark"
+        set_mode(mode)
+        self.mode = mode
+        if language is not None:
+            self.language = language
+        self._build_fonts()
         self._build_styles()
+        try:
+            self.root.configure(bg=C["bg0"])
+        except tk.TclError:
+            pass
+
+    @property
+    def dark(self):
+        return self.mode != "light"
 
     # ------------------------------------------------------------------
     def S(self, px):
@@ -77,25 +165,34 @@ class Theme:
 
     def _build_fonts(self):
         families = set(tkfont.families(self.root))
-        prefs = ["Segoe UI Variable Text", "Segoe UI", "SF Pro Text", "Helvetica Neue", "Inter", "Noto Sans",
-                 "Ubuntu", "Cantarell", "DejaVu Sans"]
-        family = next((f for f in prefs if f in families), tkfont.nametofont("TkDefaultFont").actual("family"))
-        display = next((f for f in ["Segoe UI Variable Display", "Segoe UI Semibold", "SF Pro Display", family] if f in families), family)
+        fallback = tkfont.nametofont("TkDefaultFont").actual("family")
+        latin = next((f for f in self.LATIN_FONTS if f in families), fallback)
+        family = latin
+        display = next((f for f in ["Segoe UI Variable Display", "Segoe UI Semibold", "SF Pro Display", latin] if f in families), latin)
+        if self.language == "ja":
+            ja = next((f for f in self.JAPANESE_FONTS if f in families), None)
+            if ja:
+                family = display = ja
         mono = next((f for f in ["Cascadia Mono", "Consolas", "SF Mono", "Menlo", "JetBrains Mono", "DejaVu Sans Mono"] if f in families), "TkFixedFont")
         base = 10 if sys.platform != "darwin" else 13
         self.family = family
-        self.fonts = {
-            "base": tkfont.Font(self.root, family=family, size=base),
-            "small": tkfont.Font(self.root, family=family, size=base - 1),
-            "tiny": tkfont.Font(self.root, family=family, size=base - 2),
-            "bold": tkfont.Font(self.root, family=family, size=base, weight="bold"),
-            "small_bold": tkfont.Font(self.root, family=family, size=base - 1, weight="bold"),
-            "section": tkfont.Font(self.root, family=family, size=base - 2, weight="bold"),
-            "title": tkfont.Font(self.root, family=display, size=base + 3, weight="bold"),
-            "h1": tkfont.Font(self.root, family=display, size=base + 6, weight="bold"),
-            "mono": tkfont.Font(self.root, family=mono, size=base - 1),
-            "icon": tkfont.Font(self.root, family=family, size=base + 2),
+        specs = {
+            "base": (family, base, "normal"),
+            "small": (family, base - 1, "normal"),
+            "tiny": (family, base - 2, "normal"),
+            "bold": (family, base, "bold"),
+            "small_bold": (family, base - 1, "bold"),
+            "section": (family, base - 2, "bold"),
+            "title": (display, base + 3, "bold"),
+            "h1": (display, base + 6, "bold"),
+            "mono": (mono, base - 1, "normal"),
+            "icon": (family, base + 2, "normal"),
         }
+        for key, (fam, size, weight) in specs.items():
+            if key in self.fonts:  # reconfigure: existing references stay valid
+                self.fonts[key].configure(family=fam, size=size, weight=weight)
+            else:
+                self.fonts[key] = tkfont.Font(self.root, family=fam, size=size, weight=weight)
         for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
             try:
                 tkfont.nametofont(name).configure(family=family, size=base)
@@ -103,8 +200,9 @@ class Theme:
                 pass
 
     # ------------------------------------------------------------------
-    # Image factories (cached)
+    # Image factories (cached per theme)
     def photo(self, key, factory):
+        key = (self.mode, key)
         img = self._images.get(key)
         if img is None:
             img = ImageTk.PhotoImage(factory(), master=self.root)
@@ -163,8 +261,14 @@ class Theme:
             pass  # already created (theme rebuilt)
 
     def _img(self, key, pil):
+        # ttk elements cannot be redefined, so on a theme switch the images
+        # they reference are repainted in place.
+        img = self._elements.get(key)
+        if img is not None and (img.width(), img.height()) == pil.size:
+            img.paste(pil)
+            return img
         img = ImageTk.PhotoImage(pil, master=self.root)
-        self._images[key] = img
+        self._elements[key] = img
         return img
 
     def _build_styles(self):
@@ -218,7 +322,7 @@ class Theme:
             self._element(name, imgs, border=r + S(2), padding=(S(12), S(5), S(12), S(5)))
             return name
 
-        el = btn_set("Btn", C["bg3"], C["bg4"], C["bg2"], C["bg2"])
+        el = btn_set("Btn", C["btn"], C["btn_hover"], C["btn_press"], C["bg2"], border=C["btn_edge"] or None)
         layout = lambda el: [(el, {"sticky": "nsew", "children": [("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]})]
         st.layout("TButton", layout(el))
         st.configure("TButton", foreground=C["text"], anchor="center", font=f["base"], width=0)
@@ -235,7 +339,7 @@ class Theme:
         st.configure("Ghost.TButton", foreground=C["text2"], padding=(S(6), S(3)), width=0)
         st.map("Ghost.TButton", foreground=[("disabled", C["text3"]), ("active", C["text"])])
 
-        el = btn_set("Chip", C["bg2"], C["bg3"], C["bg2"], C["bg2"], border=C["line"])
+        el = btn_set("Chip", C["bg2"], C["bg3"], C["bg2"], C["bg2"], border=C["edge"])
         st.layout("Chip.TButton", layout(el))
         st.configure("Chip.TButton", foreground=C["text2"], font=f["small"], padding=(S(2), S(0)), width=0)
         el = btn_set("ChipOn", C["accent_dim"], mix(C["accent_dim"], C["accent"], 0.25), C["accent_dim"], C["bg2"], border=C["accent"])
@@ -245,8 +349,8 @@ class Theme:
         # Entry-like fields
         fr = S(7)
         field_imgs = [
-            self._img("fld_n", self.rounded(sz, sz, fr, C["bg2"], C["line"])),
-            ("disabled", self._img("fld_d", self.flatten(self.rounded(sz, sz, fr, C["bg1"], C["line"])))),
+            self._img("fld_n", self.rounded(sz, sz, fr, C["bg2"], C["edge"])),
+            ("disabled", self._img("fld_d", self.flatten(self.rounded(sz, sz, fr, C["bg1"], C["edge"])))),
             ("focus", self._img("fld_f", self.rounded(sz, sz, fr, C["bg2"], C["accent"], bw=max(1, S(1))))),
             ("hover", self._img("fld_h", self.rounded(sz, sz, fr, C["bg2"], C["bg4"]))),
         ]
@@ -290,7 +394,7 @@ class Theme:
         # Notebook: pill tabs
         tab_n = self._img("tab_n", self.rounded(S(24), S(24), S(7), C["bg1"]))
         tab_h = self._img("tab_h", self.rounded(S(24), S(24), S(7), C["bg2"]))
-        tab_s = self._img("tab_s", self.rounded(S(24), S(24), S(7), C["bg3"], C["bg4"]))
+        tab_s = self._img("tab_s", self.rounded(S(24), S(24), S(7), C["tab_sel"], C["tab_sel_edge"] or None))
         self._element("Pill.tab", [tab_n, ("selected", tab_s), ("active", tab_h)], border=S(8))
         st.layout("TNotebook.Tab", [("Pill.tab", {"sticky": "nsew", "children": [
             ("Notebook.padding", {"side": "top", "sticky": "nsew", "children": [("Notebook.label", {"side": "top", "sticky": ""})]})]})])
@@ -340,7 +444,7 @@ class Theme:
         W, H = w * SS, h * SS
         img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
-        track = C["accent"] if on else (C["bg4"] if hover else C["bg3"])
+        track = C["accent"] if on else (C["track_hover"] if hover else C["track"])
         if disabled:
             track = C["bg2"]
         d.rounded_rectangle((0, 0, W - 1, H - 1), H // 2, fill=hex_rgb(track))
@@ -515,4 +619,16 @@ def draw_icon(name, size, color):
             line((5, y), (19, y))
     elif name == "dot":
         d.ellipse(P((8, 8), (16, 16)), fill=col)
+    elif name == "sun":
+        d.ellipse(P((8, 8), (16, 16)), outline=col, width=lw)
+        for k in range(8):
+            a = k * math.pi / 4
+            line((12 + math.cos(a) * 6.8, 12 + math.sin(a) * 6.8), (12 + math.cos(a) * 9.2, 12 + math.sin(a) * 9.2))
+    elif name == "moon":
+        d.ellipse(P((4, 4), (20, 20)), fill=col)
+        d.ellipse(P((9, 1.5), (23.5, 16)), fill=(0, 0, 0, 0))
+    elif name == "globe":
+        d.ellipse(P((3.5, 3.5), (20.5, 20.5)), outline=col, width=lw)
+        d.ellipse(P((8.2, 3.5), (15.8, 20.5)), outline=col, width=lw)
+        d.line(P((4, 12), (20, 12)), fill=col, width=lw)
     return img.resize((size, size), _LANCZOS)

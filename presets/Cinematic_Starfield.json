@@ -7,6 +7,17 @@
     "stars",
     "night"
   ],
+  "i18n": {
+    "ja": {
+      "name": "シネマティック星空",
+      "description": "やわらかな紫の星雲が広がる、奥深い星空。",
+      "tags": [
+        "宇宙",
+        "星",
+        "夜"
+      ]
+    }
+  },
   "duration": 10.0,
   "params": {
     "palette": "lavender",

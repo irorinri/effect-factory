@@ -7,6 +7,17 @@
     "warp",
     "sci-fi"
   ],
+  "i18n": {
+    "ja": {
+      "name": "ハイパースペース",
+      "description": "光速へジャンプ。",
+      "tags": [
+        "宇宙",
+        "ワープ",
+        "SF"
+      ]
+    }
+  },
   "duration": 4.0,
   "params": {
     "palette": "ice"

@@ -239,6 +239,7 @@ class EffectPlugin:
     description: str = ""
     seamless: object = False
     asset: dict = None
+    i18n: dict = None
     path: str = ""
     extra: dict = field(default_factory=dict)
 
@@ -281,7 +282,7 @@ def load_effects(effects_dir=EFFECTS_DIR):
             eff = getattr(mod, "EFFECT", None)
             if not isinstance(eff, dict) or "id" not in eff or "render_frame" not in eff:
                 continue
-            known = {"id", "name", "params", "build_cache", "render_frame", "category", "description", "seamless", "asset"}
+            known = {"id", "name", "params", "build_cache", "render_frame", "category", "description", "seamless", "asset", "i18n"}
             plugins[eff["id"]] = EffectPlugin(
                 id=str(eff["id"]),
                 name=str(eff.get("name", eff["id"])),
@@ -292,6 +293,7 @@ def load_effects(effects_dir=EFFECTS_DIR):
                 description=str(eff.get("description", "")),
                 seamless=eff.get("seamless", False),
                 asset=eff.get("asset"),
+                i18n=eff.get("i18n") if isinstance(eff.get("i18n"), dict) else None,
                 path=path,
                 extra={k: v for k, v in eff.items() if k not in known},
             )

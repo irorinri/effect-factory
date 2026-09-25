@@ -7,6 +7,17 @@
     "nebula",
     "fantasy"
   ],
+  "i18n": {
+    "ja": {
+      "name": "ファンタジア星雲",
+      "description": "オーロラ色に輝く、鮮やかな星雲。",
+      "tags": [
+        "宇宙",
+        "星雲",
+        "ファンタジー"
+      ]
+    }
+  },
   "duration": 12.0,
   "params": {
     "palette": "aurora",

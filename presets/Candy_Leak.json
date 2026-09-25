@@ -7,6 +7,17 @@
     "dreamy",
     "film"
   ],
+  "i18n": {
+    "ja": {
+      "name": "キャンディリーク",
+      "description": "夢のような映像に合う、パステルの光漏れ。",
+      "tags": [
+        "パステル",
+        "ドリーミー",
+        "フィルム"
+      ]
+    }
+  },
   "duration": 8.0,
   "params": {
     "palette": "sunset",

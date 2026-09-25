@@ -7,6 +7,17 @@
     "gold",
     "glitter"
   ],
+  "i18n": {
+    "ja": {
+      "name": "きらめきダスト ライブ",
+      "description": "クロス光をともなって昇っていく、金色のグリッター。",
+      "tags": [
+        "きらめき",
+        "ゴールド",
+        "グリッター"
+      ]
+    }
+  },
   "duration": 8.0,
   "params": {
     "palette": "gold",

@@ -495,6 +495,25 @@ def _builtin_preview(token, size=72):
     return sprite
 
 
+I18N = {"ja": {
+    "name": "雨とスプライト",
+    "description": "降りそそぐ雨粒や図形、手持ちの透過 PNG スプライト。",
+    "params": {
+        "size_randomness": ("サイズのばらつき",),
+        "length": ("尾の長さ", "落下方向への伸び。"),
+        "speed_randomness": ("速度のばらつき",),
+        "motion_direction": ("方向", "0 = 真下。"),
+        "grid_alignment": ("ランダム／整列", "左でランダム、右で流れにそろった列になります。"),
+    },
+    "asset": {
+        "label": "パーティクル",
+        "hint": "内蔵の形か、任意の透過 PNG を選べます。",
+        "builtin": {"": "筋", "builtin:png_rain:drop": "しずく", "builtin:png_rain:circle": "丸",
+                    "builtin:png_rain:square": "四角", "builtin:png_rain:star": "星"},
+    },
+}}
+
+
 EFFECT = {
     "id": "png_rain",
     "name": "Rain & Sprites",
@@ -533,6 +552,7 @@ EFFECT = {
         {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05, "group": "finish"},
         {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.2, "step": 0.01, "group": "finish", "advanced": True},
     ],
+    "i18n": I18N,
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

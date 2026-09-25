@@ -7,6 +7,17 @@
     "digital",
     "glitch"
   ],
+  "i18n": {
+    "ja": {
+      "name": "サイバーグリッチ",
+      "description": "RGB ずれをともなう、激しいデジタルブロック。",
+      "tags": [
+        "サイバーパンク",
+        "デジタル",
+        "グリッチ"
+      ]
+    }
+  },
   "duration": 5.0,
   "params": {
     "palette": "cyber",

@@ -7,6 +7,17 @@
     "travel",
     "stars"
   ],
+  "i18n": {
+    "ja": {
+      "name": "ディープスペース",
+      "description": "雲のない、視差の効いた速い星の流れ。",
+      "tags": [
+        "宇宙",
+        "旅",
+        "星"
+      ]
+    }
+  },
   "duration": 8.0,
   "params": {
     "palette": "ocean",

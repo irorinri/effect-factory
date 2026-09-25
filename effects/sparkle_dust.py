@@ -123,6 +123,28 @@ def render_frame(cache, i):
     return finish(buf, exposure=max(0.0, float(p["brightness"])))
 
 
+I18N = {"ja": {
+    "name": "きらめきダスト",
+    "description": "漂い、消え、クロス光で輝く、きらきらのグリッター。",
+    "params": {
+        "count": ("量", "画面上のきらめきの数。"),
+        "size_min": ("最小サイズ", "いちばん小さい粒の大きさ（1080p 換算のピクセル）。"),
+        "size_max": ("最大サイズ", "いちばん大きい粒の大きさ（1080p 換算のピクセル）。"),
+        "flare": ("クロス光", "明るい粒に出る十字のきらめき。"),
+        "twinkle": ("きらめき", "明滅の強さ。"),
+        "speed": ("漂う速さ", "粒が漂う速さ。"),
+        "motion_direction": ("方向", "漂う方向（180 = 上昇）。"),
+        "spread": ("ばらつき", "粒ごとの向きのばらつき。"),
+        "wander": ("ゆらぎ", "左右へのゆるやかな揺れ。"),
+        "palette": ("パレット", "カラーパレット。"),
+        "glow": ("グロー", "明るい粒のまわりのやわらかな光。"),
+        "blur": ("やわらかさ", "すべての粒をやわらかくします。"),
+        "brightness": ("明るさ", "全体の露出。"),
+        "grain": ("グレイン", "明るい部分のフィルムグレイン（黒はきれいなまま）。"),
+    },
+}}
+
+
 EFFECT = {
     "id": "sparkle_dust",
     "name": "Sparkle Dust",
@@ -145,6 +167,7 @@ EFFECT = {
         {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05, "group": "finish", "pretty": [0.9, 1.4], "help": "Overall exposure."},
         {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.2, "step": 0.005, "group": "finish", "advanced": True, "help": "Film grain on lit areas (black stays clean)."},
     ],
+    "i18n": I18N,
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

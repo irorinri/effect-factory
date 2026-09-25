@@ -7,6 +7,17 @@
     "burst",
     "colour"
   ],
+  "i18n": {
+    "ja": {
+      "name": "スピードバースト",
+      "description": "グローをまとった、カーブするカラフルな集中線。",
+      "tags": [
+        "アニメ",
+        "バースト",
+        "カラフル"
+      ]
+    }
+  },
   "duration": 4.0,
   "params": {
     "palette": "sunset",

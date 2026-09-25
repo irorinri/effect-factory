@@ -42,6 +42,8 @@ DEFAULT_SETTINGS = {
     "library_filter": "All",
     "show_advanced": False,
     "sash": [],
+    "theme": "dark",
+    "language": "auto",
 }
 
 

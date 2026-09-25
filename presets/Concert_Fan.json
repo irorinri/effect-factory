@@ -7,6 +7,17 @@
     "neon",
     "lasers"
   ],
+  "i18n": {
+    "ja": {
+      "name": "コンサートファン",
+      "description": "ステージの床から扇状に広がる、レーザーのようなビーム。",
+      "tags": [
+        "コンサート",
+        "ネオン",
+        "レーザー"
+      ]
+    }
+  },
   "duration": 6.0,
   "params": {
     "source": "center",

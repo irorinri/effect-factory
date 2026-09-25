@@ -114,6 +114,30 @@ def render_frame(cache, i):
     return finish(buf, exposure=max(0.0, float(p["brightness"])))
 
 
+I18N = {"ja": {
+    "name": "ボケ玉",
+    "description": "レンズらしい縁取り・絞り形状・色にじみを持つ、ピンぼけの光。",
+    "params": {
+        "count": ("量", "玉の数。"),
+        "size_min": ("最小サイズ", "いちばん小さい玉の半径（1080p 換算のピクセル）。"),
+        "size_max": ("最大サイズ", "いちばん大きい玉の半径（1080p 換算のピクセル）。"),
+        "aperture": ("絞り形状", "レンズの絞りの形。"),
+        "rim": ("縁の光", "玉のふちに出る明るいリング。"),
+        "opacity": ("不透明度", "玉の透け具合。"),
+        "speed": ("漂う速さ", "玉が流れる速さ。"),
+        "motion_direction": ("方向", "主な流れの向き。"),
+        "spread": ("ばらつき", "玉ごとの向きのばらつき。"),
+        "breathe": ("呼吸", "サイズと明るさのゆるやかな脈動。"),
+        "tint_r": ("赤のバランス",),
+        "tint_g": ("緑のバランス",),
+        "tint_b": ("青のバランス",),
+        "blur": ("やわらかさ", "玉のふちのぼけ具合。"),
+        "chromatic": ("色収差", "玉のふちに出る色ずれ。"),
+    },
+    "choices": {"circle": "円", "hexagon": "六角形", "heptagon": "七角形", "octagon": "八角形"},
+}}
+
+
 EFFECT = {
     "id": "bokeh_orbs",
     "name": "Bokeh Orbs",
@@ -142,6 +166,7 @@ EFFECT = {
         {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 4.0, "step": 0.05, "group": "finish", "pretty": [0.9, 1.4]},
         {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.25, "step": 0.01, "group": "finish", "advanced": True},
     ],
+    "i18n": I18N,
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

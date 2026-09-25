@@ -4,8 +4,10 @@ import hashlib
 import json
 import os
 import queue
+import sys
 import threading
 import time
+import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -17,7 +19,8 @@ from ..core import (PRESETS_DIR, TimelineModel, build_param_state, coerce_value,
                     look_base_seed, look_duration, runtime_params_for_time, spec_range)
 from ..engine import FrameRenderer, RenderSpec, screen_blend
 from .. import export as ex
-from .. import randomize
+from .. import i18n, randomize
+from ..i18n import tr
 from ..settings import (Settings, delete_user_look, read_variant, save_user_look, thumb_cache_dir, user_looks_dir,
                         write_variant)
 from .inspector import SIZE_PRESETS, AdjustTab, ExploreTab, ExportTab
@@ -171,18 +174,26 @@ class EffectFactoryApp(tk.Tk):
         self.options = options or {}
         self.withdraw()
         self.title(APP_NAME)
-        self.configure(bg=C["bg0"])
-        self.theme = Theme(self)
         self.settings = Settings()
         self._ui_q = queue.Queue()
         self.log_lines = []
         self._log_window = None
+        try:  # route Tcl background errors to the log instead of a dialog
+            self.createcommand("bgerror", self._tcl_bgerror)
+        except tk.TclError:
+            pass
+        mode = self.options.get("theme") or self.settings.get("theme")
+        language = i18n.set_language(self.options.get("language") or self.settings.get("language"))
+        self.theme = Theme(self, "light" if mode == "light" else "dark", language)
+        self.thumbs = {}  # library thumbnails, kept across UI rebuilds
+        self._variation_imgs = {}
+        self._ff_info = None
 
         self.plugins, errors = load_effects()
         for err in errors:
             self.log("[plugin] " + err)
         if not self.plugins:
-            messagebox.showerror(APP_NAME, "No effect plugins were found in the effects folder.")
+            messagebox.showerror(APP_NAME, tr("No effect plugins were found in the effects folder."))
             self.destroy()
             raise SystemExit(1)
         self.looks = {}
@@ -253,6 +264,7 @@ class EffectFactoryApp(tk.Tk):
         except tk.TclError:
             pass
         self._apply_geometry()
+        self._apply_titlebar()
 
         self.worker = PreviewWorker(self)
         self.worker.start()
@@ -270,7 +282,7 @@ class EffectFactoryApp(tk.Tk):
                 self.select_look(first["id"], push=False)
             else:
                 self.select_effect(self.effect_id, push=False)
-        self._push_history("Start")
+        self._push_history(tr("Start"))
         self._refresh_library(queue_thumbs=False)
         self.after(10, self._drain)
         self.after(16, self._tick)
@@ -278,7 +290,7 @@ class EffectFactoryApp(tk.Tk):
         self.after(400, self._queue_thumbnails)
         self.after(900, self.shuffle_variations)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.set_status("Pick a look on the left · Space plays · R surprises you · Ctrl+E exports")
+        self.set_status(tr("Pick a look on the left · Space plays · R surprises you · Ctrl+E exports"))
         self.deiconify()
         if self.options.get("tab"):
             tabs = {"adjust": 0, "explore": 1, "export": 2}
@@ -288,6 +300,14 @@ class EffectFactoryApp(tk.Tk):
     # plumbing
     def post(self, kind, payload=None):
         self._ui_q.put((kind, payload))
+
+    def _tcl_bgerror(self, *args):
+        self.log("[tk] " + " ".join(str(a) for a in args))
+
+    def report_callback_exception(self, exc, val, tb):
+        text = "".join(traceback.format_exception(exc, val, tb))
+        self.log("[error] " + text)
+        sys.stderr.write(text)
 
     def log(self, text):
         line = time.strftime("%H:%M:%S ") + str(text)
@@ -330,15 +350,17 @@ class EffectFactoryApp(tk.Tk):
             self.set_status(*payload) if isinstance(payload, tuple) else self.set_status(payload)
         elif kind == "thumb":
             key, img = payload
+            self.thumbs[key] = img
             self.library.set_thumb(key, img)
         elif kind == "variation":
             gen, i, img = payload
             if gen == self._variation_gen:
+                self._variation_imgs[i] = img
                 self.explore.set_variation_image(i, img)
         elif kind == "preview_built":
             pass
         elif kind == "preview_error":
-            self.preview.status = "Preview failed – see log"
+            self.preview.status = tr("Preview failed – see log")
             self.preview.redraw()
         elif kind == "ffmpeg":
             self._on_ffmpeg(payload)
@@ -351,7 +373,8 @@ class EffectFactoryApp(tk.Tk):
             self._on_export_failed(payload)
         elif kind == "still_done":
             self._set_busy(False)
-            self.set_status(f"Saved still frame · {os.path.basename(payload)}", ("Show", lambda p=payload: ex.open_path(p)))
+            self.set_status(tr("Saved still frame · {name}", name=os.path.basename(payload)),
+                            (tr("Show"), lambda p=payload: ex.open_path(p)))
         elif kind == "call":
             payload()
 
@@ -361,6 +384,7 @@ class EffectFactoryApp(tk.Tk):
         S = self.theme.S
         outer = ttk.Frame(self, style="Root.TFrame", padding=(S(8), S(8), S(8), S(4)))
         outer.pack(fill="both", expand=True)
+        self._outer = outer
         self._build_header(outer)
         self._build_statusbar(outer)
 
@@ -376,7 +400,7 @@ class EffectFactoryApp(tk.Tk):
 
         inner_left = ttk.Frame(left)
         inner_left.pack(fill="both", expand=True, padx=S(3), pady=S(3))
-        self.library = LibraryPanel(inner_left, self.theme, self._on_library_select, self._on_library_context)
+        self.library = LibraryPanel(inner_left, self.theme, self._on_library_select, self._on_library_context, thumbs=self.thumbs)
         self.library.pack(fill="both", expand=True)
 
         inner_c = ttk.Frame(center)
@@ -401,9 +425,9 @@ class EffectFactoryApp(tk.Tk):
         self.adjust = AdjustTab(self.notebook, self.theme, self)
         self.explore = ExploreTab(self.notebook, self.theme, self)
         self.export_tab = ExportTab(self.notebook, self.theme, self)
-        self.notebook.add(self.adjust, text="Adjust")
-        self.notebook.add(self.explore, text="Explore")
-        self.notebook.add(self.export_tab, text="Export")
+        self.notebook.add(self.adjust, text=tr("Adjust"))
+        self.notebook.add(self.explore, text=tr("Explore"))
+        self.notebook.add(self.export_tab, text=tr("Export"))
 
     def _build_header(self, parent):
         S = self.theme.S
@@ -417,31 +441,38 @@ class EffectFactoryApp(tk.Tk):
         ttk.Label(inner, text=f"v{__version__}", style="Faint.TLabel").pack(side="left", padx=(S(8), 0), pady=(S(4), 0))
         right = ttk.Frame(inner)
         right.pack(side="right")
-        self.undo_btn = icon_button(right, self.theme, "undo", self.undo, "Undo (Ctrl+Z)")
+        self.undo_btn = icon_button(right, self.theme, "undo", self.undo, tr("Undo (Ctrl+Z)"))
         self.undo_btn.pack(side="left")
-        self.redo_btn = icon_button(right, self.theme, "redo", self.redo, "Redo (Ctrl+Y)")
+        self.redo_btn = icon_button(right, self.theme, "redo", self.redo, tr("Redo (Ctrl+Y)"))
         self.redo_btn.pack(side="left", padx=(S(2), S(10)))
-        icon_button(right, self.theme, "keyboard", self.show_shortcuts, "Keyboard shortcuts (F1)").pack(side="left", padx=(0, S(10)))
-        icon_button(right, self.theme, "dice", self.surprise, "Surprise me – tasteful random tweak (R)", style="TButton",
-                    text=" Surprise me", size=15).pack(side="left", padx=(0, S(8)))
-        self.header_export = icon_button(right, self.theme, "export", self.export, "Export the video (Ctrl+E)", style="Accent.TButton",
-                                         text=" Export", size=15, color="#ffffff")
+        self.lang_btn = icon_button(right, self.theme, "globe", self.show_language_menu, tr("Language / 言語"),
+                                    text=" " + i18n.language_name(i18n.language()), size=15, color=C["text2"])
+        self.lang_btn.pack(side="left")
+        dark = self.theme.dark
+        self.theme_btn = icon_button(right, self.theme, "sun" if dark else "moon", self.toggle_theme,
+                                     tr("Switch to the light theme") if dark else tr("Switch to the dark theme"), size=16)
+        self.theme_btn.pack(side="left", padx=(S(2), 0))
+        icon_button(right, self.theme, "keyboard", self.show_shortcuts, tr("Keyboard shortcuts (F1)")).pack(side="left", padx=(S(2), S(10)))
+        icon_button(right, self.theme, "dice", self.surprise, tr("Surprise me – tasteful random tweak (R)"), style="TButton",
+                    text=" " + tr("Surprise me"), size=15).pack(side="left", padx=(0, S(8)))
+        self.header_export = icon_button(right, self.theme, "export", self.export, tr("Export the video (Ctrl+E)"), style="Accent.TButton",
+                                         text=" " + tr("Export"), size=15, color="#ffffff")
         self.header_export.pack(side="left")
 
     def _build_statusbar(self, parent):
         S = self.theme.S
         bar = ttk.Frame(parent, style="Root.TFrame")
         bar.pack(side="bottom", fill="x")
-        self.status_lbl = ttk.Label(bar, text="Ready", style="Root.TLabel")
+        self.status_lbl = ttk.Label(bar, text=tr("Ready"), style="Root.TLabel")
         self.status_lbl.pack(side="left")
         self.status_action = ttk.Button(bar, text="", style="Ghost.TButton")
         self.progress = ttk.Progressbar(bar, mode="determinate", maximum=1.0, length=S(220))
         self.eta_lbl = ttk.Label(bar, text="", style="Root.TLabel")
-        self.cancel_btn = ttk.Button(bar, text="Cancel", style="Ghost.TButton", command=self.cancel_export)
-        self.log_btn = icon_button(bar, self.theme, "log", self.show_log, "Show the log", size=14, color=C["text2"])
+        self.cancel_btn = ttk.Button(bar, text=tr("Cancel"), style="Ghost.TButton", command=self.cancel_export)
+        self.log_btn = icon_button(bar, self.theme, "log", self.show_log, tr("Show the log"), size=14, color=C["text2"])
         self.log_btn.configure(style="Ghost.TButton")
         self.log_btn.pack(side="right")
-        self.ff_lbl = ttk.Label(bar, text="ffmpeg: checking…", style="Root.TLabel")
+        self.ff_lbl = ttk.Label(bar, text=tr("ffmpeg: checking…"), style="Root.TLabel")
         self.ff_lbl.pack(side="right", padx=(0, S(10)))
 
     def _apply_geometry(self):
@@ -501,7 +532,7 @@ class EffectFactoryApp(tk.Tk):
             self.bind_all(f"<{mod}-Shift-z>", guard(self.redo))
             self.bind_all(f"<{mod}-e>", guard(self.export, True))
             self.bind_all(f"<{mod}-s>", guard(self.save_look_dialog, True))
-            self.bind_all(f"<{mod}-f>", guard(self.library.focus_search, True))
+            self.bind_all(f"<{mod}-f>", guard(lambda: self.library.focus_search(), True))
             self.bind_all(f"<{mod}-r>", guard(self.surprise, True))
             self.bind_all(f"<{mod}-Key-0>", guard(self.reset_zoom))
             self.bind_all(f"<{mod}-l>", guard(self.show_log, True))
@@ -517,17 +548,20 @@ class EffectFactoryApp(tk.Tk):
         order = {name: i for i, name in enumerate(("Particles", "Light", "Atmosphere", "Graphic", "Glitch", "Other"))}
         for name, look in self.looks.items():
             plugin = self.plugins[look["effect_id"]]
-            items.append({"key": ("look", name), "kind": "look", "id": name, "name": name,
-                          "subtitle": plugin.name, "effect_id": plugin.id, "category": plugin.category,
-                          "source": look.get("_source"), "description": look.get("description", ""),
-                          "tags": " ".join(look.get("tags", []))})
+            items.append({"key": ("look", name), "kind": "look", "id": name, "name": i18n.look_name(look, name),
+                          "subtitle": i18n.effect_name(plugin), "effect_id": plugin.id, "category": plugin.category,
+                          "source": look.get("_source"), "description": i18n.look_description(look),
+                          "tags": " ".join(i18n.look_tags(look)),
+                          "search": " ".join([name, plugin.name, look.get("description", ""), *look.get("tags", []),
+                                              i18n.category_name(plugin.category)])})
         with_looks = {i["effect_id"] for i in items}
         for pid, plugin in self.plugins.items():
             if pid in with_looks:
                 continue
-            items.append({"key": ("effect", pid), "kind": "effect", "id": pid, "name": plugin.name,
-                          "subtitle": "Effect defaults", "effect_id": pid, "category": plugin.category,
-                          "source": "builtin", "description": plugin.description, "tags": ""})
+            items.append({"key": ("effect", pid), "kind": "effect", "id": pid, "name": i18n.effect_name(plugin),
+                          "subtitle": tr("Effect defaults"), "effect_id": pid, "category": plugin.category,
+                          "source": "builtin", "description": i18n.effect_description(plugin), "tags": "",
+                          "search": " ".join([plugin.name, plugin.description, i18n.category_name(plugin.category)])})
         items.sort(key=lambda it: (it["source"] != "user", order.get(it["category"], 9), it["subtitle"], it["name"]))
         return items
 
@@ -537,7 +571,7 @@ class EffectFactoryApp(tk.Tk):
         self.library.set_selected(("look", self.look_name) if self.look_name else ("effect", self.effect_id))
         if queue_thumbs and hasattr(self, "jobs"):
             for item in items:
-                if item["key"] not in self.library.thumbs:
+                if item["key"] not in self.thumbs:
                     self.jobs.add(self._render_thumb, item)
 
     def _on_library_select(self, item):
@@ -550,22 +584,22 @@ class EffectFactoryApp(tk.Tk):
         menu = tk.Menu(self, tearoff=0)
         if item["kind"] == "look":
             look = self.looks.get(item["id"], {})
-            menu.add_command(label="Open", command=lambda: self.select_look(item["id"]))
+            menu.add_command(label=tr("Open"), command=lambda: self.select_look(item["id"]))
             if look.get("_source") == "user":
-                menu.add_command(label="Delete look…", command=lambda: self._delete_look(item["id"]))
+                menu.add_command(label=tr("Delete look…"), command=lambda: self._delete_look(item["id"]))
             if look.get("_path"):
-                menu.add_command(label="Show file", command=lambda: ex.open_path(look["_path"]))
+                menu.add_command(label=tr("Show file"), command=lambda: ex.open_path(look["_path"]))
         else:
-            menu.add_command(label="Open", command=lambda: self.select_effect(item["id"]))
+            menu.add_command(label=tr("Open"), command=lambda: self.select_effect(item["id"]))
         menu.add_separator()
-        menu.add_command(label="Open my looks folder", command=lambda: ex.open_path(ensure_dir(user_looks_dir())))
+        menu.add_command(label=tr("Open my looks folder"), command=lambda: ex.open_path(ensure_dir(user_looks_dir())))
         menu.tk_popup(event.x_root, event.y_root)
 
     def _delete_look(self, name):
         look = self.looks.get(name)
         if not look:
             return
-        if not messagebox.askyesno(APP_NAME, f"Delete your look “{name}”?", parent=self):
+        if not messagebox.askyesno(APP_NAME, tr("Delete your look “{name}”?", name=self.look_title(name)), parent=self):
             return
         try:
             delete_user_look(look["_path"])
@@ -576,7 +610,7 @@ class EffectFactoryApp(tk.Tk):
         if self.look_name == name:
             self.look_name = None
         self._refresh_library()
-        self.set_status(f"Deleted look “{name}”")
+        self.set_status(tr("Deleted look “{name}”", name=name))
 
     def select_look(self, name, push=True):
         look = self.looks.get(name)
@@ -594,7 +628,7 @@ class EffectFactoryApp(tk.Tk):
             plugin = self.plugin()
             if plugin.asset and plugin.asset.get("key") == key:
                 self.assets[plugin.id] = token
-        self._after_selection(push, f"Look: {name}")
+        self._after_selection(push, tr("Look: {name}", name=self.look_title(name)))
 
     def select_effect(self, effect_id, push=True):
         if effect_id not in self.plugins:
@@ -602,7 +636,7 @@ class EffectFactoryApp(tk.Tk):
         self.set_playing(False)
         self.look_name = None
         self._load_effect(effect_id)
-        self._after_selection(push, f"Effect: {self.plugin().name}")
+        self._after_selection(push, tr("Effect: {name}", name=i18n.effect_name(self.plugin())))
 
     def _load_effect(self, effect_id):
         self.effect_id = effect_id
@@ -640,11 +674,18 @@ class EffectFactoryApp(tk.Tk):
             return None
         return spec_range((look.get("params") or {}).get(key))
 
+    def look_title(self, name=None):
+        """Display name of a look in the UI language."""
+        name = name or self.look_name
+        return i18n.look_name(self.looks.get(name), name) if name else ""
+
     def _update_titles(self):
         plugin = self.plugin()
-        self.toolbar.title.configure(text=self.look_name or plugin.name)
-        self.toolbar.subtitle.configure(text=plugin.name if self.look_name else plugin.category)
-        self.title(f"{self.look_name or plugin.name} — {APP_NAME}")
+        effect = i18n.effect_name(plugin)
+        title = self.look_title() if self.look_name else effect
+        self.toolbar.title.configure(text=title)
+        self.toolbar.subtitle.configure(text=effect if self.look_name else i18n.category_name(plugin.category))
+        self.title(f"{title} — {APP_NAME}")
 
     # ------------------------------------------------------------------
     # parameters
@@ -659,8 +700,8 @@ class EffectFactoryApp(tk.Tk):
         token = self.current_asset()
         for choice in (plugin.asset or {}).get("builtin", []):
             if choice["token"] == token:
-                return f"Built-in shape · {choice['label']}"
-        return f"Custom PNG · {os.path.basename(str(token))}" if token else ""
+                return tr("Built-in shape · {name}", name=i18n.asset_choice(plugin, token, choice["label"]))
+        return tr("Custom PNG · {name}", name=os.path.basename(str(token))) if token else ""
 
     def extras(self, plugin=None, effect_assets=None):
         plugin = plugin or self.plugin()
@@ -699,7 +740,7 @@ class EffectFactoryApp(tk.Tk):
             self.timeline.update_selected(self.values, self.overrides)
             self.timeline_canvas.redraw()
         elif self.timeline.markers:
-            self.markerbar.status.configure(text="Unsaved edit – press 1/2/3 to store it as X/Y/Z")
+            self.markerbar.status.configure(text=tr("Unsaved edit – press 1/2/3 to store it as X/Y/Z"))
         if key == "camera_zoom":
             self._update_zoom_chip()
         self.adjust.refresh(keys=[key])
@@ -708,7 +749,7 @@ class EffectFactoryApp(tk.Tk):
     def on_param_commit(self, key, value):
         self.on_param_change(key, value)
         self._refresh_meta()
-        self.schedule_history("Edit " + str(self.plugin().param_map().get(key, {}).get("label", key)))
+        self.schedule_history(tr("Edit {name}", name=i18n.param_label(self.plugin(), self.plugin().param_map().get(key, {"key": key}))))
 
     def on_param_reset(self, key):
         pdesc = self.plugin().param_map().get(key, {})
@@ -725,7 +766,7 @@ class EffectFactoryApp(tk.Tk):
         self.adjust.refresh()
         self._update_zoom_chip()
         self.request_preview()
-        self.schedule_history("Reset " + str(pdesc.get("label", key)))
+        self.schedule_history(tr("Reset {name}", name=i18n.param_label(self.plugin(), pdesc or {"key": key})))
 
     def reset_params(self):
         self.overrides = set()
@@ -736,12 +777,12 @@ class EffectFactoryApp(tk.Tk):
         self.adjust.refresh()
         self._update_zoom_chip()
         self.request_preview()
-        self.schedule_history("Reset all")
-        self.set_status("Parameters reset to the look")
+        self.schedule_history(tr("Reset all"))
+        self.set_status(tr("Parameters reset to the look"))
 
     def apply_values(self, new_values, label):
         if not new_values:
-            self.set_status("Nothing to change – try a stronger setting")
+            self.set_status(tr("Nothing to change – try a stronger setting"))
             return
         self.values.update(new_values)
         self.overrides |= set(new_values)
@@ -759,13 +800,13 @@ class EffectFactoryApp(tk.Tk):
         self.assets[plugin.id] = token
         self.adjust.refresh()
         self.request_preview(immediate=True)
-        self.schedule_history("Particle shape")
+        self.schedule_history(tr("Particle shape"))
 
     def choose_asset_file(self):
         plugin = self.plugin()
         if not plugin.asset:
             return
-        path = filedialog.askopenfilename(parent=self, title="Choose a transparent PNG",
+        path = filedialog.askopenfilename(parent=self, title=tr("Choose a transparent PNG"),
                                           filetypes=plugin.asset.get("filetypes") or [("PNG", "*.png")])
         if path:
             self.set_asset(os.path.abspath(path))
@@ -804,8 +845,8 @@ class EffectFactoryApp(tk.Tk):
         bg = (self.preview_background, self.settings.get("preview_background_image", "")) if self.preview_background != "black" else ("black", "")
         self.worker.submit({"spec": spec, "display": (fw, fh), "bg": bg, "version": self._preview_version})
         self.worker.playhead = self.playhead
-        self.preview.info = f"{self.out_w}×{self.out_h} · {self.out_fps} fps · preview {rw}×{rh}"
-        self.preview.status = "Rendering…"
+        self.preview.info = tr("{w}×{h} · {fps} fps · preview {pw}×{ph}", w=self.out_w, h=self.out_h, fps=self.out_fps, pw=rw, ph=rh)
+        self.preview.status = tr("Rendering…")
         self.preview.redraw()
 
     def set_preview_quality(self, value):
@@ -815,8 +856,8 @@ class EffectFactoryApp(tk.Tk):
 
     def set_preview_background(self, value):
         if value == "image":
-            path = filedialog.askopenfilename(parent=self, title="Choose a backdrop image",
-                                              filetypes=[("Images", "*.png *.jpg *.jpeg *.webp *.bmp"), ("All files", "*.*")])
+            path = filedialog.askopenfilename(parent=self, title=tr("Choose a backdrop image"),
+                                              filetypes=[(tr("Images"), "*.png *.jpg *.jpeg *.webp *.bmp"), (tr("All files"), "*.*")])
             if not path:
                 self.toolbar.backdrop.set(self.preview_background)
                 return
@@ -833,7 +874,7 @@ class EffectFactoryApp(tk.Tk):
         zoom = zoom * (1.08 if up else 1 / 1.08)
         zoom = round(min(6.0, max(0.1, zoom)), 3)
         self.on_param_change("camera_zoom", zoom)
-        self.schedule_history("Zoom")
+        self.schedule_history(tr("Zoom"))
         return "break"
 
     def reset_zoom(self):
@@ -923,14 +964,14 @@ class EffectFactoryApp(tk.Tk):
             self.playhead = 0.0
         self._refresh_meta()
         self.request_preview()
-        self.schedule_history("Loop length")
+        self.schedule_history(tr("Loop length"))
 
     def set_loop(self, flag):
         self.loop = bool(flag)
         self.transport.loop_var.set(self.loop)
         self._refresh_meta()
         self.request_preview()
-        self.schedule_history("Loop")
+        self.schedule_history(tr("Loop"))
 
     def crossfade_seconds(self):
         if not self.loop:
@@ -940,10 +981,11 @@ class EffectFactoryApp(tk.Tk):
 
     def loop_hint_text(self):
         if not self.loop:
-            return "Loop is off: the clip plays once from start to end."
+            return tr("Loop is off: the clip plays once from start to end.")
         if self.plugin().is_seamless(self.values) and not self.timeline.markers:
-            return "✓ This effect loops natively – motion is snapped to the loop length, no blending needed."
-        return f"The first {self.crossfade_seconds():.1f} s blend with the continuation past the end, so the loop point is invisible."
+            return tr("✓ This effect loops natively – motion is snapped to the loop length, no blending needed.")
+        return tr("The first {sec} s blend with the continuation past the end, so the loop point is invisible.",
+                  sec=f"{self.crossfade_seconds():.1f}")
 
     def set_crossfade(self, value):
         self.crossfade = float(value)
@@ -956,8 +998,8 @@ class EffectFactoryApp(tk.Tk):
 
     def save_marker(self, label):
         self.timeline.save(label, self.playhead, self.values, self.overrides)
-        self.markerbar.status.configure(text=f"Saved {label} at {format_time(self.playhead)}")
-        self._after_timeline_change(f"Marker {label}")
+        self.markerbar.status.configure(text=tr("Saved {m} at {time}", m=label, time=format_time(self.playhead)))
+        self._after_timeline_change(tr("Marker {m}", m=label))
 
     def select_marker(self, label, apply=True):
         if label is None:
@@ -974,7 +1016,7 @@ class EffectFactoryApp(tk.Tk):
             self.overrides = set(marker.get("param_overrides", []))
             self.adjust.refresh()
         self._set_playhead(marker["time_sec"], sync=False)
-        self.markerbar.status.configure(text=f"Editing marker {self.timeline.base_label(label)} – changes update it")
+        self.markerbar.status.configure(text=tr("Editing marker {m} – changes update it", m=self.timeline.base_label(label)))
         self.timeline_canvas.redraw()
 
     def drag_marker(self, label, t, move=False):
@@ -987,34 +1029,34 @@ class EffectFactoryApp(tk.Tk):
             hold = self.timeline.hold_label(base)
             active = hold if hold in self.timeline.markers else base
             self.timeline.selected = active
-            self.markerbar.status.configure(text=f"Hold {base} until {format_time(self.timeline.markers[active]['time_sec'])}"
-                                            if hold in self.timeline.markers else f"Drag {base} to the right to hold it")
+            self.markerbar.status.configure(text=tr("Hold {m} until {time}", m=base, time=format_time(self.timeline.markers[active]["time_sec"]))
+                                            if hold in self.timeline.markers else tr("Drag {m} to the right to hold it", m=base))
         if active in self.timeline.markers:
             self._set_playhead(self.timeline.markers[active]["time_sec"], sync=False)
         self.timeline_canvas.redraw()
         return changed
 
     def marker_drag_done(self):
-        self._after_timeline_change("Marker drag")
+        self._after_timeline_change(tr("Marker drag"))
 
     def clear_markers(self):
         if self.timeline.clear():
-            self.markerbar.status.configure(text="Markers cleared")
-            self._after_timeline_change("Clear markers")
+            self.markerbar.status.configure(text=tr("Markers cleared"))
+            self._after_timeline_change(tr("Clear markers"))
 
     def delete_marker(self, base):
         if self.timeline.delete(base):
-            self._after_timeline_change(f"Remove {base}")
+            self._after_timeline_change(tr("Remove {m}", m=base))
 
     def remove_hold(self, base):
         if self.timeline.remove_hold(base):
-            self._after_timeline_change(f"Remove hold {base}")
+            self._after_timeline_change(tr("Remove hold {m}", m=base))
 
     def set_wrap_markers(self, flag):
         self.wrap_markers = bool(flag)
         self.markerbar.wrap_var.set(self.wrap_markers)
         self.request_preview()
-        self.schedule_history("Blend back")
+        self.schedule_history(tr("Blend back"))
 
     def _after_timeline_change(self, label):
         self.timeline_canvas.redraw()
@@ -1034,14 +1076,16 @@ class EffectFactoryApp(tk.Tk):
     def surprise(self):
         rng = np.random.default_rng()
         new = randomize.surprise(self.plugin(), self.values, self.look(), rng, self.random_strength, self._locks())
-        self.apply_values(new, "Surprise")
-        self.set_status(f"Surprise! Changed {len(new)} settings · Ctrl+Z to undo")
+        self.apply_values(new, tr("Surprise"))
+        if new:
+            self.set_status(tr("Surprise! Changed {n} settings · Ctrl+Z to undo", n=len(new)))
 
     def shuffle_variations(self):
         self._variation_gen += 1
         gen = self._variation_gen
         self._variations = randomize.variations(self.plugin(), self.values, self.look(), 6, self.random_strength,
                                                 self._locks(), seed=int(time.time() * 1000) & 0x7FFFFFFF)
+        self._variation_imgs = {}
         self.explore.clear_variations()
         plugin = self.plugin()
         base_values = dict(self.values)
@@ -1067,8 +1111,8 @@ class EffectFactoryApp(tk.Tk):
 
     def apply_variation(self, i):
         if 0 <= i < len(self._variations):
-            self.apply_values(self._variations[i], f"Variation {i + 1}")
-            self.set_status("Variation applied · Ctrl+Z to undo · Shuffle for more")
+            self.apply_values(self._variations[i], tr("Variation {n}", n=i + 1))
+            self.set_status(tr("Variation applied · Ctrl+Z to undo · Shuffle for more"))
 
     def _on_randomize_toggle(self):
         """Continue the variation counter stored next to previous exports."""
@@ -1087,7 +1131,7 @@ class EffectFactoryApp(tk.Tk):
         self.adjust.refresh()
         self._refresh_meta()
         self.request_preview(immediate=True)
-        self.schedule_history(f"Variation #{self.variant}")
+        self.schedule_history(tr("Variation #{n}", n=self.variant))
 
     def set_base_seed(self, text):
         try:
@@ -1100,7 +1144,7 @@ class EffectFactoryApp(tk.Tk):
             self.resolve_display()
             self.adjust.refresh()
             self.request_preview(immediate=True)
-            self.schedule_history("Seed")
+            self.schedule_history(tr("Seed"))
         self._refresh_meta()
 
     # ------------------------------------------------------------------
@@ -1182,16 +1226,15 @@ class EffectFactoryApp(tk.Tk):
     def undo(self):
         if self._history_after is not None:
             self.after_cancel(self._history_after)
-            label = "Edit"
-            self._push_history(label)
+            self._push_history(tr("Edit"))
         if self.history_index > 0:
             self._restore(self.history_index - 1)
-            self.set_status("Undo")
+            self.set_status(tr("Undo"))
 
     def redo(self):
         if self.history_index < len(self.history) - 1:
             self._restore(self.history_index + 1)
-            self.set_status("Redo")
+            self.set_status(tr("Redo"))
 
     def history_pick(self, selection):
         if selection:
@@ -1204,8 +1247,8 @@ class EffectFactoryApp(tk.Tk):
     def _refresh_meta(self):
         self.explore.set_variant(self.variant, self.base_seed)
         self.export_tab.refresh()
-        self.transport.loop_hint.configure(text="✓ native loop" if (self.loop and self.crossfade_seconds() == 0.0) else
-                                           (f"blend {self.crossfade_seconds():.1f} s" if self.loop else ""))
+        self.transport.loop_hint.configure(text=tr("✓ native loop") if (self.loop and self.crossfade_seconds() == 0.0) else
+                                           (tr("blend {sec} s", sec=f"{self.crossfade_seconds():.1f}") if self.loop else ""))
         self.timeline_canvas.redraw()
         self.transport.set_time(self.playhead, self.duration)
         self._update_zoom_chip()
@@ -1273,21 +1316,21 @@ class EffectFactoryApp(tk.Tk):
     def save_look_dialog(self):
         S = self.theme.S
         dlg = tk.Toplevel(self)
-        dlg.title("Save look")
+        dlg.title(tr("Save look"))
         dlg.configure(bg=C["bg1"])
         dlg.transient(self)
         dlg.resizable(False, False)
         body = ttk.Frame(dlg, padding=S(18))
         body.pack(fill="both", expand=True)
-        ttk.Label(body, text="Save as your look", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(body, text="Your looks appear in the library under “Mine”.", style="Faint.TLabel").pack(anchor="w", pady=(S(2), S(12)))
+        ttk.Label(body, text=tr("Save as your look"), style="Title.TLabel").pack(anchor="w")
+        ttk.Label(body, text=tr("Your looks appear in the library under “Mine”."), style="Faint.TLabel").pack(anchor="w", pady=(S(2), S(12)))
         base = self.look_name or self.plugin().name
-        default = base if (self.look() or {}).get("_source") == "user" else f"My {base}"
+        default = base if (self.look() or {}).get("_source") == "user" else tr("My {name}", name=self.look_title() or i18n.effect_name(self.plugin()))
         name_var = tk.StringVar(value=default)
-        ttk.Label(body, text="Name", style="Muted.TLabel").pack(anchor="w")
+        ttk.Label(body, text=tr("Name"), style="Muted.TLabel").pack(anchor="w")
         ent = ttk.Entry(body, textvariable=name_var, width=36)
         ent.pack(fill="x", pady=(S(4), S(10)))
-        ttk.Label(body, text="Description (optional)", style="Muted.TLabel").pack(anchor="w")
+        ttk.Label(body, text=tr("Description (optional)"), style="Muted.TLabel").pack(anchor="w")
         desc_var = tk.StringVar(value="")
         ttk.Entry(body, textvariable=desc_var, width=36).pack(fill="x", pady=(S(4), S(14)))
         row = ttk.Frame(body)
@@ -1299,9 +1342,9 @@ class EffectFactoryApp(tk.Tk):
                 return
             existing = self.looks.get(name)
             if existing and existing.get("_source") != "user":
-                messagebox.showerror(APP_NAME, "A built-in look already uses that name.", parent=dlg)
+                messagebox.showerror(APP_NAME, tr("A built-in look already uses that name."), parent=dlg)
                 return
-            if existing and not messagebox.askyesno(APP_NAME, f"Replace your look “{name}”?", parent=dlg):
+            if existing and not messagebox.askyesno(APP_NAME, tr("Replace your look “{name}”?", name=name), parent=dlg):
                 return
             state = self.build_state()
             params = {k: v for k, v in state["resolved_params"].items()}
@@ -1310,17 +1353,17 @@ class EffectFactoryApp(tk.Tk):
             try:
                 save_user_look(name, plugin.id, params, duration=self.duration, description=desc_var.get().strip(), assets=assets)
             except Exception as exc:
-                messagebox.showerror(APP_NAME, f"Could not save the look:\n{exc}", parent=dlg)
+                messagebox.showerror(APP_NAME, tr("Could not save the look:\n{error}", error=exc), parent=dlg)
                 return
             dlg.destroy()
-            self.library.thumbs.pop(("look", name), None)
+            self.thumbs.pop(("look", name), None)
             self._reload_looks()
             self._refresh_library()
             self.select_look(name, push=True)
-            self.set_status(f"Saved look “{name}”")
+            self.set_status(tr("Saved look “{name}”", name=name))
 
-        ttk.Button(row, text="Cancel", command=dlg.destroy).pack(side="right")
-        ttk.Button(row, text="Save", style="Accent.TButton", command=do_save).pack(side="right", padx=(0, S(8)))
+        ttk.Button(row, text=tr("Cancel"), command=dlg.destroy).pack(side="right")
+        ttk.Button(row, text=tr("Save"), style="Accent.TButton", command=do_save).pack(side="right", padx=(0, S(8)))
         ent.bind("<Return>", do_save)
         dlg.bind("<Escape>", lambda _e: dlg.destroy())
         dlg.update_idletasks()
@@ -1371,13 +1414,9 @@ class EffectFactoryApp(tk.Tk):
     def auto_encoder(self):
         return ex.pick_encoder("auto", self.available_encoders) if self.available_encoders else "libx264"
 
-    def set_encoder_label(self, label):
-        if label.startswith("Auto"):
-            self.settings["encoder"] = "auto"
-            return
-        for enc in self.available_encoders:
-            if ex.ENCODER_LABELS.get(enc, enc) == label:
-                self.settings["encoder"] = enc
+    def set_encoder(self, encoder):
+        if encoder == "auto" or encoder in self.available_encoders:
+            self.settings["encoder"] = encoder
 
     def set_output_dir(self, path):
         path = path.strip()
@@ -1399,12 +1438,12 @@ class EffectFactoryApp(tk.Tk):
         if path == self.settings.get("ffmpeg_path", ""):
             return
         self.settings["ffmpeg_path"] = path
-        self.export_tab.ff_status.configure(text="Checking ffmpeg…", style="Faint.TLabel")
+        self.export_tab.ff_status.configure(text=tr("Checking ffmpeg…"), style="Faint.TLabel")
         threading.Thread(target=self._detect_ffmpeg, daemon=True).start()
 
     def browse_ffmpeg(self):
-        types = [("ffmpeg", "ffmpeg.exe"), ("All files", "*.*")] if os.name == "nt" else [("All files", "*")]
-        path = filedialog.askopenfilename(parent=self, title="Locate ffmpeg", filetypes=types)
+        types = [("ffmpeg", "ffmpeg.exe"), (tr("All files"), "*.*")] if os.name == "nt" else [(tr("All files"), "*")]
+        path = filedialog.askopenfilename(parent=self, title=tr("Locate ffmpeg"), filetypes=types)
         if path:
             self.export_tab.ff_var.set(path)
             self.set_ffmpeg_path(path)
@@ -1417,20 +1456,24 @@ class EffectFactoryApp(tk.Tk):
             info["encoders"] = ex.probe_encoders(path)
         self.post("ffmpeg", info)
 
-    def _on_ffmpeg(self, info):
+    def _on_ffmpeg(self, info, quiet=False):
+        self._ff_info = info
         self.ffmpeg = info["path"]
         self.available_encoders = info["encoders"]
         tab = self.export_tab
         if self.ffmpeg:
-            encs = ", ".join(ex.ENCODER_LABELS.get(e, e) for e in self.available_encoders) or "none"
-            tab.ff_status.configure(text=f"✓ ffmpeg {info['version'] or ''} · {self.ffmpeg}\nEncoders: {encs}", style="Good.TLabel")
+            encs = ", ".join(ex.ENCODER_LABELS.get(e, e) for e in self.available_encoders) or tr("none")
+            tab.ff_status.configure(text=tr("✓ ffmpeg {version} · {path}\nEncoders: {encoders}", version=info["version"] or "",
+                                            path=self.ffmpeg, encoders=encs), style="Good.TLabel")
             self.ff_lbl.configure(text=f"ffmpeg ✓ · {ex.ENCODER_LABELS.get(self.auto_encoder(), self.auto_encoder())}")
-            self.log(f"ffmpeg found: {self.ffmpeg} ({info['version']}); encoders: {encs}")
+            if not quiet:
+                self.log(f"ffmpeg found: {self.ffmpeg} ({info['version']}); encoders: {encs}")
         else:
-            tab.ff_status.configure(text="ffmpeg not found. Install it (ffmpeg.org) or locate ffmpeg.exe above.\n"
-                                         "PNG sequences still export without ffmpeg.", style="Warn.TLabel")
-            self.ff_lbl.configure(text="ffmpeg not found")
-            self.log("ffmpeg not found")
+            tab.ff_status.configure(text=tr("ffmpeg not found. Install it (ffmpeg.org) or locate ffmpeg.exe above.\n"
+                                            "PNG sequences still export without ffmpeg."), style="Warn.TLabel")
+            self.ff_lbl.configure(text=tr("ffmpeg not found"))
+            if not quiet:
+                self.log("ffmpeg not found")
         tab.refresh()
 
     # ------------------------------------------------------------------
@@ -1462,8 +1505,8 @@ class EffectFactoryApp(tk.Tk):
         self.set_output_dir(self.export_tab.out_var.get())
         fmt = "mp4" if draft else self.settings.get("format", "mp4")
         if fmt != "png" and not self.ffmpeg:
-            messagebox.showwarning(APP_NAME, "ffmpeg was not found.\n\nInstall ffmpeg (https://ffmpeg.org/download.html) "
-                                             "or locate the executable in the Export tab. PNG sequences can be exported without it.",
+            messagebox.showwarning(APP_NAME, tr("ffmpeg was not found.\n\nInstall ffmpeg (https://ffmpeg.org/download.html) "
+                                                "or locate the executable in the Export tab. PNG sequences can be exported without it."),
                                    parent=self)
             self.notebook.select(self.export_tab)
             return
@@ -1471,7 +1514,7 @@ class EffectFactoryApp(tk.Tk):
         try:
             ensure_dir(outdir)
         except Exception as exc:
-            messagebox.showerror(APP_NAME, f"Cannot create the output folder:\n{exc}", parent=self)
+            messagebox.showerror(APP_NAME, tr("Cannot create the output folder:\n{error}", error=exc), parent=self)
             return
         w, h = (self.out_w, self.out_h) if not draft else (_even(self.out_w / 2), _even(self.out_h / 2))
         spec = self._export_spec(w, h)
@@ -1484,7 +1527,7 @@ class EffectFactoryApp(tk.Tk):
         self._cancel = threading.Event()
         self._export_started = time.perf_counter()
         self._export_draft = draft
-        self._set_busy(True, "Exporting…")
+        self._set_busy(True, tr("Exporting…"))
         self.log(f"Export {base} ({fmt}, {encoder}, {quality})")
 
         def run():
@@ -1506,7 +1549,7 @@ class EffectFactoryApp(tk.Tk):
     def cancel_export(self):
         if self._cancel is not None:
             self._cancel.set()
-            self.set_status("Cancelling…")
+            self.set_status(tr("Cancelling…"))
 
     def _set_busy(self, busy, text=""):
         self.busy = bool(busy)
@@ -1537,9 +1580,9 @@ class EffectFactoryApp(tk.Tk):
         eta = info.get("eta")
         text = f"{frac * 100:.0f}%"
         if eta is not None and info.get("frame", 0) > 3:
-            text += f" · {int(eta // 60)}:{int(eta % 60):02d} left"
+            text += tr(" · {time} left", time=f"{int(eta // 60)}:{int(eta % 60):02d}")
         self.eta_lbl.configure(text=text)
-        self.preview.busy_text = f"Exporting · {text}"
+        self.preview.busy_text = tr("Exporting · {progress}", progress=text)
         self.preview.redraw()
 
     def _on_export_done(self, res):
@@ -1547,8 +1590,9 @@ class EffectFactoryApp(tk.Tk):
         seconds = time.perf_counter() - self._export_started
         self.last_export = res["video"]
         name = os.path.basename(res["video"].rstrip("/\\"))
-        self.set_status(f"Exported {name} in {seconds:.1f} s", ("Show in folder", lambda p=res["video"]: ex.open_path(p)))
-        self.export_tab.last_lbl.configure(text=f"Last export: {res['video']}\n(click to show in folder)")
+        self.set_status(tr("Exported {name} in {sec} s", name=name, sec=f"{seconds:.1f}"),
+                        (tr("Show in folder"), lambda p=res["video"]: ex.open_path(p)))
+        self.export_tab.last_lbl.configure(text=tr("Last export: {path}\n(click to show in folder)", path=res["video"]))
         self.log(f"Export finished: {res['video']}")
         if self.randomize_each_export.get() and not self._export_draft:
             self.variant += 1
@@ -1561,11 +1605,11 @@ class EffectFactoryApp(tk.Tk):
     def _on_export_failed(self, message):
         self._set_busy(False)
         if message is None:
-            self.set_status("Export cancelled")
+            self.set_status(tr("Export cancelled"))
             return
-        self.set_status("Export failed – see log")
+        self.set_status(tr("Export failed – see log"))
         self.log("Export failed: " + message)
-        messagebox.showerror(APP_NAME, f"Export failed:\n\n{message[-1200:]}", parent=self)
+        messagebox.showerror(APP_NAME, tr("Export failed:\n\n{error}", error=message[-1200:]), parent=self)
 
     def export_still(self):
         if self.busy:
@@ -1575,7 +1619,7 @@ class EffectFactoryApp(tk.Tk):
         frame = min(spec.frames - 1, int(self.playhead * spec.fps))
         path = os.path.join(outdir, ex.output_base(self.settings.get("file_prefix", "overlay"), self.look_name or self.effect_id,
                                                    self.effect_id, spec.w, spec.h, spec.fps, f"_f{frame:04d}") + ".png")
-        self._set_busy(True, "Rendering still…")
+        self._set_busy(True, tr("Rendering still…"))
 
         def run():
             try:
@@ -1587,14 +1631,14 @@ class EffectFactoryApp(tk.Tk):
 
     def make_zip(self):
         if not self.last_export:
-            messagebox.showinfo(APP_NAME, "Export a video first, then bundle it as a ZIP package.", parent=self)
+            messagebox.showinfo(APP_NAME, tr("Export a video first, then bundle it as a ZIP package."), parent=self)
             return
         try:
             path = ex.create_package_zip(self.last_export)
         except Exception as exc:
             messagebox.showerror(APP_NAME, str(exc), parent=self)
             return
-        self.set_status(f"Created {os.path.basename(path)}", ("Show", lambda: ex.open_path(path)))
+        self.set_status(tr("Created {name}", name=os.path.basename(path)), (tr("Show"), lambda: ex.open_path(path)))
 
     def copy_command(self):
         spec_w, spec_h = self.out_w, self.out_h
@@ -1605,7 +1649,7 @@ class EffectFactoryApp(tk.Tk):
         self.clipboard_clear()
         self.clipboard_append(text)
         self.log("ffmpeg command: " + text)
-        self.set_status("Copied the ffmpeg command to the clipboard")
+        self.set_status(tr("Copied the ffmpeg command to the clipboard"))
 
     def reveal_last_export(self):
         if self.last_export:
@@ -1622,7 +1666,7 @@ class EffectFactoryApp(tk.Tk):
                 self._log_window = None
         S = self.theme.S
         win = tk.Toplevel(self)
-        win.title("Log")
+        win.title(tr("Log"))
         win.configure(bg=C["bg1"])
         win.geometry(f"{S(760)}x{S(360)}")
         text = tk.Text(win, bg=C["bg1"], fg=C["text2"], insertbackground=C["text"], relief="flat",
@@ -1636,26 +1680,151 @@ class EffectFactoryApp(tk.Tk):
     def show_shortcuts(self):
         S = self.theme.S
         win = tk.Toplevel(self)
-        win.title("Keyboard shortcuts")
+        win.title(tr("Keyboard shortcuts"))
         win.configure(bg=C["bg1"])
         win.transient(self)
         body = ttk.Frame(win, padding=S(20))
         body.pack(fill="both", expand=True)
-        ttk.Label(body, text="Keyboard shortcuts", style="Title.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, S(12)))
+        ttk.Label(body, text=tr("Keyboard shortcuts"), style="Title.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, S(12)))
         rows = [
-            ("Space", "Play / pause"), ("Home", "Back to start"), ("← / →", "Step one frame"),
-            ("R", "Surprise me"), ("1 / 2 / 3", "Save marker X / Y / Z at the playhead"),
-            ("Ctrl+Z / Ctrl+Y", "Undo / redo"), ("Ctrl+S", "Save as your look"), ("Ctrl+E", "Export"),
-            ("Ctrl+F", "Search the library"), ("Ctrl+0", "Reset zoom"), ("Mouse wheel on preview", "Zoom"),
-            ("Double-click a slider", "Reset it to the look"), ("Shift + drag a slider", "Fine adjustment"),
-            ("Drag a marker right", "Hold its look (xx / yy / zz)"), ("Shift + drag a marker", "Move it"),
-            ("Ctrl+L", "Show the log"),
+            ("Space", tr("Play / pause")), ("Home", tr("Back to start")), ("← / →", tr("Step one frame")),
+            ("R", tr("Surprise me")), ("1 / 2 / 3", tr("Save marker X / Y / Z at the playhead")),
+            ("Ctrl+Z / Ctrl+Y", tr("Undo / redo")), ("Ctrl+S", tr("Save as your look")), ("Ctrl+E", tr("Export")),
+            ("Ctrl+F", tr("Search the library")), ("Ctrl+0", tr("Reset zoom")), (tr("Mouse wheel on preview"), tr("Zoom")),
+            (tr("Double-click a slider"), tr("Reset it to the look")), (tr("Shift + drag a slider"), tr("Fine adjustment")),
+            (tr("Drag a marker right"), tr("Hold its look (xx / yy / zz)")), (tr("Shift + drag a marker"), tr("Move it")),
+            ("Ctrl+L", tr("Show the log")),
         ]
         for i, (k, v) in enumerate(rows, start=1):
             ttk.Label(body, text=k, style="Bold.TLabel").grid(row=i, column=0, sticky="w", padx=(0, S(24)), pady=S(3))
             ttk.Label(body, text=v, style="Muted.TLabel").grid(row=i, column=1, sticky="w", pady=S(3))
-        ttk.Button(body, text="Close", command=win.destroy).grid(row=len(rows) + 1, column=1, sticky="e", pady=(S(14), 0))
+        ttk.Button(body, text=tr("Close"), command=win.destroy).grid(row=len(rows) + 1, column=1, sticky="e", pady=(S(14), 0))
         win.bind("<Escape>", lambda _e: win.destroy())
+
+    # ------------------------------------------------------------------
+    # appearance: theme & language
+    def toggle_theme(self):
+        self.apply_appearance(mode="light" if self.theme.dark else "dark")
+
+    def show_language_menu(self):
+        menu = tk.Menu(self, tearoff=0)
+        var = tk.StringVar(value=self.settings.get("language") or "auto")
+        for code, name in i18n.LANGUAGES:
+            menu.add_radiobutton(label=name, variable=var, value=code, command=lambda c=code: self.set_language(c))
+        menu.add_separator()
+        menu.add_radiobutton(label=tr("Match the system ({name})", name=i18n.language_name(i18n.detect_language())),
+                             variable=var, value="auto", command=lambda: self.set_language("auto"))
+        btn = self.lang_btn
+        menu.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height())
+
+    def set_language(self, code):
+        self.apply_appearance(language=code)
+
+    def apply_appearance(self, mode=None, language=None):
+        """Switch theme and/or UI language by rebuilding the widgets.
+
+        Every piece of creative state lives on the app, so the widget tree can
+        be rebuilt from scratch without losing the look, history or timeline.
+        """
+        if self.busy:
+            self.set_status(tr("Finish or cancel the export before changing the appearance"))
+            return False
+        mode = "light" if (mode or self.theme.mode) == "light" else "dark"
+        lang_setting = language if language is not None else (self.settings.get("language") or "auto")
+        lang = i18n.resolve_language(lang_setting)
+        self.settings["theme"] = mode
+        self.settings["language"] = lang_setting
+        theme_changed = mode != self.theme.mode
+        if not theme_changed and lang == i18n.language():
+            return False
+        # Keep text typed into fields that commit on focus-out.
+        self.set_output_dir(self.export_tab.out_var.get())
+        self.set_ffmpeg_path(self.export_tab.ff_var.get())
+        ui = {"tab": self.notebook.index(self.notebook.select()), "filter": self.library.filter,
+              "query": self.library.query(), "status": self.status_lbl.cget("text"), "playing": self.playing}
+        try:
+            ui["sashes"] = [self.paned.sash_coord(i) for i in range(len(self.paned.panes()) - 1)]
+        except tk.TclError:
+            ui["sashes"] = []
+        self.set_playing(False)
+        if self._preview_after is not None:
+            self.after_cancel(self._preview_after)
+            self._preview_after = None
+        self._outer.destroy()
+        self._cancel_orphan_afters()
+
+        i18n.set_language(lang)
+        self.theme.apply(mode, lang)
+        self._build_ui()
+        self._apply_titlebar()
+        self.adjust.rebuild(self.plugin())
+        self._refresh_library(queue_thumbs=False)
+        if ui["filter"] in self.library.chip_buttons:
+            self.library.set_filter(ui["filter"])
+        if ui["query"]:
+            self.library._clear_placeholder()
+            self.library.search_var.set(ui["query"])
+        for i, img in sorted(self._variation_imgs.items()):
+            self.explore.set_variation_image(i, img)
+        if self._ff_info is not None:
+            self._on_ffmpeg(self._ff_info, quiet=True)
+        self._update_titles()
+        self._refresh_meta()
+        self._refresh_history()
+        self.notebook.select(ui["tab"])
+        self.set_playing(ui["playing"])
+        if self._log_window is not None:
+            try:
+                self._log_window.configure(bg=C["bg1"])
+                self._log_window.title(tr("Log"))
+                self._log_text.configure(bg=C["bg1"], fg=C["text2"], insertbackground=C["text"])
+            except tk.TclError:
+                self._log_window = None
+        self.focus_set()
+
+        def restore_sashes():
+            for i, (x, y) in enumerate(ui["sashes"]):
+                try:
+                    self.paned.sash_place(i, x, y)
+                except tk.TclError:
+                    pass
+        self.after(30, restore_sashes)
+        self.request_preview()
+        if theme_changed:
+            self.set_status(tr("Light theme") if mode == "light" else tr("Dark theme"))
+        else:
+            self.set_status(tr("Language: {name}", name=i18n.language_name(lang)))
+        return True
+
+    def _cancel_orphan_afters(self):
+        """Drop timers whose callbacks died with the destroyed widgets."""
+        try:
+            pending = self.tk.splitlist(self.tk.call("after", "info"))
+        except tk.TclError:
+            return
+        for after_id in pending:
+            try:
+                script = self.tk.splitlist(self.tk.call("after", "info", after_id))[0]
+                command = self.tk.splitlist(script)[0]
+                if not self.tk.call("info", "commands", command):
+                    self.after_cancel(after_id)
+            except (tk.TclError, IndexError):
+                pass
+
+    def _apply_titlebar(self):
+        """Match the Windows 10/11 title bar to the theme."""
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+            self.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            value = ctypes.c_int(1 if self.theme.dark else 0)
+            for attr in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE (new / pre-20H1)
+                if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(value), ctypes.sizeof(value)) == 0:
+                    break
+        except Exception:
+            pass
 
     def rebuild_inspector(self):
         self.settings["show_advanced"] = bool(self.show_advanced.get())

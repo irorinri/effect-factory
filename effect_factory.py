@@ -3,6 +3,7 @@
     python effect_factory.py                 # start the app
     python effect_factory.py --look "Fairy Dust"
     python effect_factory.py --screenshot ui.png   # capture the window and exit
+    python effect_factory.py --theme light --lang ja
 """
 
 import argparse
@@ -58,6 +59,8 @@ def main(argv=None):
     parser.add_argument("--look", help="look to open on start")
     parser.add_argument("--tab", choices=("adjust", "explore", "export"), help="inspector tab to show")
     parser.add_argument("--size", help="window size, e.g. 1480x900")
+    parser.add_argument("--theme", choices=("dark", "light"), help="colour theme for this session")
+    parser.add_argument("--lang", choices=("ja", "en"), help="UI language for this session")
     parser.add_argument("--screenshot", help="save a screenshot of the window to this path and exit")
     parser.add_argument("--screenshot-delay", type=int, default=6000, help="milliseconds before the screenshot")
     args = parser.parse_args(argv)
@@ -66,7 +69,7 @@ def main(argv=None):
     _enable_dpi_awareness()
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from efx.ui.app import run
-    run({"look": args.look, "tab": args.tab, "size": args.size,
+    run({"look": args.look, "tab": args.tab, "size": args.size, "theme": args.theme, "language": args.lang,
          "screenshot": args.screenshot, "screenshot_delay": args.screenshot_delay})
     return 0
 

@@ -113,6 +113,20 @@ def render_frame(cache, i):
     return finish(buf, exposure=max(0.0, float(p["brightness"])))
 
 
+I18N = {"ja": {
+    "name": "オーロラリボン",
+    "description": "揺らめく光の筋をまとって流れる、オーロラのカーテン。",
+    "params": {
+        "ribbons": ("カーテンの数",),
+        "height": ("カーテンの高さ",),
+        "position": ("縦位置", "オーロラの下端の位置。"),
+        "waviness": ("うねり",),
+        "curtain": ("光の筋", "カーテン内の縦方向の光の筋。"),
+        "shimmer": ("揺らめき", "光の筋がカーテンに沿って流れる速さ。"),
+    },
+}}
+
+
 EFFECT = {
     "id": "aurora_ribbons",
     "name": "Aurora Ribbons",
@@ -133,6 +147,7 @@ EFFECT = {
         {"key": "brightness", "label": "Brightness", "type": "float", "default": 1.0, "min": 0.2, "max": 3.0, "step": 0.05, "group": "finish"},
         {"key": "grain", "label": "Grain", "type": "float", "default": 0.0, "min": 0.0, "max": 0.25, "step": 0.01, "group": "finish", "advanced": True},
     ],
+    "i18n": I18N,
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

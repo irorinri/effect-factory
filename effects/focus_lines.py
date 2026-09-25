@@ -347,6 +347,39 @@ def render_frame(cache, i):
     return finish(buf, exposure=max(0.0, brightness), knee=1.0)
 
 
+I18N = {"ja": {
+    "name": "集中線",
+    "description": "スパイラル状の隙間や円弧、グラデーションにも対応した、マンガ風の集中線・スピード線。",
+    "params": {
+        "count": ("本数", "集中線の本数。"),
+        "length": ("外側の伸び", "線が外側へ伸びる長さ。"),
+        "width": ("太さ", "線の外側の太さ。"),
+        "hole_radius": ("中心の空き", "中央の空白部分の大きさ。"),
+        "taper": ("先端の細さ", "大きいほど内側の先端が鋭くなります。"),
+        "outer_taper": ("外側の細さ", "線の外側の端を細くします。"),
+        "size_randomness": ("サイズのばらつき", "線の長さと太さのばらつき。"),
+        "angle_randomness": ("角度のばらつき", "線の配置のランダムさ。"),
+        "arc": ("円弧", "線が広がる角度の範囲。"),
+        "arc_rotation": ("円弧の向き", "円弧が向く方向。"),
+        "center_x": ("中心 X", "焦点の水平位置。"),
+        "center_y": ("中心 Y", "焦点の垂直位置。"),
+        "hole_spiral": ("空きのスパイラル", "内側の端をスパイラル状に外へずらします。"),
+        "hole_spiral_branches": ("スパイラルの枝数", "内側スパイラルの枝の数。"),
+        "hole_spiral_beta": ("スパイラルの曲率", "内側スパイラルの曲がり方。"),
+        "spiral": ("スパイラル", "線にねじれを加えます。"),
+        "line_curve": ("線のカーブ", "スパイラル方向に線を曲げます。"),
+        "wobble": ("中心の揺れ", "焦点の小さな動き。"),
+        "rotation_speed": ("回転", "全体を回転させます（度/秒）。"),
+        "flicker": ("ちらつき", "線ごとの明るさの揺らぎ。"),
+        "speed": ("速度", "アニメーション全体の速さ。"),
+        "palette": ("パレット", "多色パレットは円周に沿って色が変わります。"),
+        "blur": ("ぼかし", "線のふちをやわらげます。"),
+        "glow": ("グロー", "線のまわりの光のにじみ。"),
+        "brightness": ("明るさ", "全体の明るさ。"),
+    },
+}}
+
+
 EFFECT = {
     'id': 'focus_lines',
     'name': 'Focus Lines',
@@ -380,6 +413,7 @@ EFFECT = {
         {'key': 'glow', 'label': 'Glow', 'type': 'float', 'default': 0.6, 'min': 0.0, 'max': 2.0, 'step': 0.05, 'group': 'finish', 'help': 'Light bloom around the lines.'},
         {'key': 'brightness', 'label': 'Brightness', 'type': 'float', 'default': 0.70, 'min': 0.2, 'max': 2.2, 'step': 0.05, 'group': 'finish', 'help': 'Overall brightness.'},
     ],
+    "i18n": I18N,
     'build_cache': build_cache,
     'render_frame': render_frame,
 }

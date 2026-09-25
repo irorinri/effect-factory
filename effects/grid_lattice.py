@@ -295,6 +295,28 @@ def render_frame(cache, i):
     return finish(buf, knee=1.0 if mono and glow <= 0.0 else 0.85)
 
 
+I18N = {"ja": {
+    "name": "グリッドライン",
+    "description": "斜線やネオンカラー、シンセウェーブ風の床にも対応した、スクロールするグリッド。",
+    "params": {
+        "spacing": ("間隔", "グリッド線どうしの距離。"),
+        "vertical_width": ("縦線の太さ", "縦線の太さ。"),
+        "horizontal_width": ("横線の太さ", "横線の太さ。"),
+        "vertical_width_randomness": ("縦線の太さのばらつき",),
+        "horizontal_width_randomness": ("横線の太さのばらつき",),
+        "diagonal_count": ("斜線", "斜め方向の線を 0〜2 方向追加します。"),
+        "diagonal_span": ("斜線の飛び幅", "斜線が何マス先とつながるか。"),
+        "perspective": ("床のパース", "グリッドを奥へ続く床として寝かせます（シンセウェーブ）。"),
+        "vertical_angle": ("縦線の角度",),
+        "horizontal_angle": ("横線の角度",),
+        "vertical_speed": ("縦スクロール", "1 秒あたりのマス数（ループに合わせて整数マスにそろえます）。"),
+        "horizontal_speed": ("横スクロール", "1 秒あたりのマス数（ループに合わせて整数マスにそろえます）。"),
+        "palette": ("パレット", "線の種類ごとに異なる色が付きます。"),
+        "line_fade": ("線の淡さ", "線を淡くします。"),
+    },
+}}
+
+
 EFFECT = {
     "id": "grid_lattice",
     "name": "Grid Lattice Lines",
@@ -320,6 +342,7 @@ EFFECT = {
         {"key": "blur", "label": "Blur", "type": "float", "default": 1.2, "min": 0.0, "max": 8.0, "step": 0.1, "group": "finish"},
         {"key": "glow", "label": "Glow", "type": "float", "default": 0.25, "min": 0.0, "max": 3.0, "step": 0.05, "group": "finish"},
     ],
+    "i18n": I18N,
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

@@ -7,6 +7,17 @@
     "vintage",
     "warm"
   ],
+  "i18n": {
+    "ja": {
+      "name": "フィルムの光漏れ",
+      "description": "やさしいフラッシュをともなう、暖かなアナログの光漏れ。",
+      "tags": [
+        "フィルム",
+        "ヴィンテージ",
+        "暖色"
+      ]
+    }
+  },
   "duration": 8.0,
   "params": {
     "palette": "ember"

@@ -7,6 +7,17 @@
     "stars",
     "glints"
   ],
+  "i18n": {
+    "ja": {
+      "name": "星屑グリッター",
+      "description": "明るいクロス光をもつ、密でくっきりとしたグリッター。",
+      "tags": [
+        "白",
+        "星",
+        "クロス光"
+      ]
+    }
+  },
   "duration": 6.0,
   "params": {
     "palette": "ice",

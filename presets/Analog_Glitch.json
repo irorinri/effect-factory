@@ -7,6 +7,17 @@
     "retro",
     "analog"
   ],
+  "i18n": {
+    "ja": {
+      "name": "アナロググリッチ",
+      "description": "VHS の走査線、ノイズ帯、トラッキングずれ。",
+      "tags": [
+        "VHS",
+        "レトロ",
+        "アナログ"
+      ]
+    }
+  },
   "duration": 5.0,
   "params": {
     "palette": "mono",

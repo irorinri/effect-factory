@@ -7,6 +7,17 @@
     "storm",
     "winter"
   ],
+  "i18n": {
+    "ja": {
+      "name": "吹雪",
+      "description": "風に吹かれて激しく舞う雪。",
+      "tags": [
+        "雪",
+        "嵐",
+        "冬"
+      ]
+    }
+  },
   "duration": 6.0,
   "params": {
     "palette": "ice",

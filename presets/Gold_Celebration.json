@@ -7,6 +7,17 @@
     "wedding",
     "award"
   ],
+  "i18n": {
+    "ja": {
+      "name": "ゴールドセレブレーション",
+      "description": "きらめく金色の紙片とリボン。",
+      "tags": [
+        "ゴールド",
+        "結婚式",
+        "授賞式"
+      ]
+    }
+  },
   "duration": 8.0,
   "params": {
     "palette": "gold",
