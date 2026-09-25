@@ -4,14 +4,19 @@ EffectFactory is a local-first desktop tool for making loopable overlay effects
 for music videos, streams, shorts and other creator work. Pick a look, tweak it
 live, export a seamless loop. Everything renders on your machine.
 
+日本語 UI に対応しています（OS の言語設定に合わせて自動で切り替わり、ヘッダーからいつでも変更できます）。
+
 ![Effect Factory main window](docs/images/ui.png)
 
 ## Highlights
 
-- **Beautiful by default** – 14 procedural effects rebuilt on an HDR rendering
+- **Beautiful by default** – 17 procedural effects built on an HDR rendering
   kit (soft bloom, highlight roll-off, anti-aliasing, banding-free dithering)
-  and 36 curated looks such as *Northern Lights*, *City Lights Bokeh*,
-  *Sakura Petals*, *Synthwave Grid* and *Hyperspace*.
+  and 43 curated looks such as *Northern Lights*, *Cinematic Flares*,
+  *Pool Caustics*, *Pop Halftone*, *Sakura Petals* and *Synthwave Grid*.
+- **Japanese / English, dark / light** – the interface follows your system
+  language and can be switched from the header (globe button), together with a
+  dark or light theme (sun / moon button). Your work is kept when you switch.
 - **Seamless loops** – motion is snapped to the loop length so most effects
   loop perfectly with no blending. Effects that cannot (and animated timelines)
   get an automatic cross-fade.
@@ -35,14 +40,26 @@ live, export a seamless loop. Everything renders on your machine.
 
 ![Some of the included looks](docs/images/looks.jpg)
 
+![Japanese interface with the light theme](docs/images/ui-light-ja.png)
+
 ## Included effects
 
 | Category   | Effects |
 |------------|---------|
 | Particles  | Sparkle Dust, Confetti Pro (paper, ribbons, hearts, petals, stars), Rain & Sprites (custom PNGs), Snowfall |
-| Light      | Bokeh Orbs, Light Rays (stage / live), Light Leaks |
-| Atmosphere | Fog Haze, Starfield Pro, Aurora Ribbons |
-| Graphic    | Focus Lines, Grid Lattice (incl. synthwave floor), Warp Speed |
+| Light      | Bokeh Orbs, Light Rays (stage / live), Light Leaks, **Anamorphic Flares** |
+| Atmosphere | Fog Haze, Starfield Pro, Aurora Ribbons, **Water Caustics** |
+| Graphic    | Focus Lines, Grid Lattice (incl. synthwave floor), Warp Speed, **Halftone Waves** |
+
+New in 0.3:
+
+- **Anamorphic Flares** – drifting lights with long horizontal lens streaks,
+  spectral halo rings and ghost reflections mirrored through the frame centre.
+- **Water Caustics** – the light net at the bottom of a pool, computed by
+  refracting light through a moving wave surface (with optional prism-like
+  dispersion and wind).
+- **Halftone Waves** – pop-art dot screens whose dots swell with ripples,
+  sweeps, interfering waves or noise, on a hexagonal or square grid.
 | Glitch     | Glitch Scanlines |
 
 ## Requirements
@@ -79,6 +96,10 @@ On macOS / Linux use `python3 -m venv .venv` and `source .venv/bin/activate`.
    half-resolution check, *Still PNG* for thumbnails, *ZIP package* to bundle a
    render with the README/LICENSE templates in `templates/`.
 
+The globe button in the header switches the language (日本語 / English /
+match the system) and the sun / moon button switches between the dark and light
+themes; both are remembered.
+
 Your own looks are saved with *Save look* (`Ctrl+S`) and appear under *Mine*.
 They live in your user folder (`%APPDATA%\EffectFactory`, `~/Library/Application Support/EffectFactory`
 or `~/.config/effect-factory`) together with your settings.
@@ -102,6 +123,7 @@ or `~/.config/effect-factory`) together with your settings.
 
 ```text
 python effect_factory.py --look "Northern Lights" --tab export
+python effect_factory.py --theme light --lang ja     # for this session only
 python effect_factory.py --screenshot window.png   # capture the window and quit
 ```
 
@@ -137,7 +159,8 @@ efx/engine.py       frame renderer, loop cross-fades, camera zoom
 efx/export.py       ffmpeg discovery, encoders, MP4/MOV/PNG export
 efx/randomize.py    Surprise me and variations
 efx/settings.py     user settings and saved looks
-efx/ui/             Tk interface (theme, widgets, library, preview, inspector)
+efx/i18n.py         UI translations (English source strings, Japanese)
+efx/ui/             Tk interface (themes, widgets, library, preview, inspector)
 effects/            effect plugins and the shared rendering kit (_fxkit.py)
 presets/            built-in looks (JSON)
 tests/              unit, render, export and UI smoke tests
@@ -159,6 +182,7 @@ EFFECT = {
          "min": 10, "max": 1000, "group": "shape"},
         {"key": "palette", "label": "Palette", "type": "palette", "default": "aurora", "group": "color"},
     ],
+    "i18n": {"ja": {"name": "マイエフェクト", "params": {"count": ("量", "粒の数。")}}},  # optional
     "build_cache": build_cache,
     "render_frame": render_frame,
 }

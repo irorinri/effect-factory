@@ -17,6 +17,7 @@ that raises while loading is skipped and reported in the log.
 | `description` | no | One sentence for tooltips and the inspector |
 | `seamless` | no | `True`, or `callable(params) -> bool`, when the effect repeats exactly after the loop length. Other effects get an automatic cross-fade in loop mode. |
 | `asset` | no | Optional image input (see `effects/png_rain.py`): `key`, `label`, `builtin` choices, `default`, `preview(token, size)` and `filetypes` |
+| `i18n` | no | Translations of the texts above, per language code (see *Translations*) |
 
 ## Parameter descriptors
 
@@ -125,6 +126,38 @@ Looks are JSON files in `presets/` (built-in) or the user's looks folder:
 A parameter value can be fixed, a `[min, max]` range, or `{"choices": [...]}`.
 Ranges and choices are resolved per variation, each parameter from its own
 random stream.
+
+## Translations
+
+The interface is available in English and Japanese. Texts in `EFFECT` are
+English; add an `i18n` entry to translate them:
+
+```python
+"i18n": {"ja": {
+    "name": "マイドット",
+    "description": "漂う光の粒。",
+    "params": {                      # key: (label, help) – help is optional
+        "count": ("量", "粒の数。"),
+        "shape": ("形",),
+    },
+    "choices": {"circle": "円", "star": "星"},       # values of choice parameters
+    "asset": {"label": "形", "hint": "…", "builtin": {"token": "ラベル"}},
+}}
+```
+
+Common labels such as *Palette*, *Speed*, *Glow*, *Brightness* or *Grain*
+are translated automatically, so only list your own terms. Anything missing
+falls back to English.
+
+Looks translate their name, description and tags the same way (the English
+`name` stays the look's identifier and is used for file names):
+
+```json
+"i18n": {"ja": {"name": "オーロラ", "description": "緑と紫のオーロラのカーテン。", "tags": ["オーロラ", "夜"]}}
+```
+
+The tests check that every built-in effect parameter, look and UI string has a
+Japanese translation (`tests/test_i18n.py`).
 
 ## Authoring guidelines
 

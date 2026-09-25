@@ -10,6 +10,16 @@ small local-first creator tool, so practical improvements are especially useful.
 - add a colour palette to `effects/_fxkit.py`
 - document a plugin authoring detail
 - add a small, self-contained effect plugin (see `docs/PLUGIN_API.md`)
+- improve a translation: UI strings live in `efx/i18n.py`, effect and look
+  texts in their `"i18n"` entries
+
+## Translations
+
+User-visible text in the `efx` package goes through `tr()` with an English
+source string, for example `tr("Saved look “{name}”", name=name)`. Add the
+Japanese text to `JA` in `efx/i18n.py` with the same `{fields}`;
+`tests/test_i18n.py` fails when a string, effect parameter or look has no
+translation.
 
 ## Development setup
 

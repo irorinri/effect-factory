@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.3.0 - Japanese UI, light theme, three new effects
+
+### New
+- Japanese user interface (日本語). The language follows the operating system
+  and can be changed from the globe button in the header (日本語 / English /
+  match the system). Effects, parameters, palettes and looks are translated;
+  search finds looks by their English or Japanese names.
+- Light theme next to the dark one (sun / moon button in the header). Switching
+  theme or language keeps the current look, edits, markers, history and
+  thumbnails. On Windows the title bar follows the theme.
+- Anamorphic Flares: drifting lights with long horizontal lens streaks,
+  spectral halos and ghost reflections.
+- Water Caustics: pool-floor light nets from light refracted through moving
+  waves, with prism-like dispersion and wind.
+- Halftone Waves: pop-art halftone dots driven by ripples, sweeps,
+  interference or noise on hexagonal or square grids.
+- Seven new looks: Cinematic Flares, Golden Sun Flare, Pool Caustics, Prism
+  Water, Pop Halftone, Mono Halftone Sweep and Neon Interference (43 in total).
+- Plugins and looks can carry their own translations (`"i18n"`), see
+  `docs/PLUGIN_API.md`.
+- `--theme` and `--lang` command-line options.
+
+### Fixed
+- The width / height fields in the Export tab no longer show values rounded to
+  the drag step (1080 was displayed as 1088).
+- Bloom and colour fringing no longer misread float64 buffers from plugins.
+- Background Tk errors are written to the log instead of the console.
+
 ## v0.2.0 - Redesign
 
 ### New
