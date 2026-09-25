@@ -204,8 +204,22 @@ class EffectFactoryApp(tk.Tk):
         self.variant = 1
         # preferences
         st = self.settings
-        self.out_w, self.out_h, self.out_fps = int(st["w"]), int(st["h"]), int(st["fps"])
-        self.crossfade = float(st["crossfade"])
+
+        def num(key, default, cast=int, lo=None, hi=None):
+            try:
+                v = cast(st.get(key, default))
+            except (TypeError, ValueError):
+                v = default
+            if lo is not None:
+                v = max(lo, v)
+            if hi is not None:
+                v = min(hi, v)
+            return v
+        # Settings come from a user-editable file: never trust their types.
+        self.out_w = num("w", 1920, int, 64, 7680) // 2 * 2
+        self.out_h = num("h", 1080, int, 64, 7680) // 2 * 2
+        self.out_fps = num("fps", 30, int, 1, 120)
+        self.crossfade = num("crossfade", 1.0, float, 0.1, 4.0)
         self.preview_quality = st["preview_quality"] if st["preview_quality"] in PREVIEW_QUALITY else "balanced"
         self.preview_background = st["preview_background"] if st["preview_background"] in ("black", "dusk", "image") else "black"
         self.random_strength = st["random_strength"]
@@ -1444,6 +1458,8 @@ class EffectFactoryApp(tk.Tk):
     def export(self, draft=False):
         if self.busy:
             return
+        # Pick up text typed into the Export tab even if the field kept focus.
+        self.set_output_dir(self.export_tab.out_var.get())
         fmt = "mp4" if draft else self.settings.get("format", "mp4")
         if fmt != "png" and not self.ffmpeg:
             messagebox.showwarning(APP_NAME, "ffmpeg was not found.\n\nInstall ffmpeg (https://ffmpeg.org/download.html) "
