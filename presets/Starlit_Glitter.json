@@ -1,0 +1,25 @@
+{
+  "name": "Starlit Glitter",
+  "effect_id": "sparkle_dust",
+  "description": "Dense, crisp glitter with bright cross glints.",
+  "tags": [
+    "white",
+    "stars",
+    "glints"
+  ],
+  "duration": 6.0,
+  "params": {
+    "palette": "ice",
+    "count": 520,
+    "size_min": 0.6,
+    "size_max": 3.2,
+    "flare": 0.8,
+    "twinkle": 0.9,
+    "speed": 0.3,
+    "spread": 1.0,
+    "glow": 0.7
+  },
+  "random": {
+    "base_seed": 9888
+  }
+}

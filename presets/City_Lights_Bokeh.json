@@ -1,0 +1,26 @@
+{
+  "name": "City Lights Bokeh",
+  "effect_id": "bokeh_orbs",
+  "description": "Hexagonal neon bokeh like a night street.",
+  "tags": [
+    "neon",
+    "city",
+    "night",
+    "hexagon"
+  ],
+  "duration": 10.0,
+  "params": {
+    "palette": "neon",
+    "aperture": "hexagon",
+    "count": 80,
+    "size_min": 14.0,
+    "size_max": 90.0,
+    "rim": 0.55,
+    "opacity": 0.7,
+    "speed": 0.5,
+    "chromatic": 1.5
+  },
+  "random": {
+    "base_seed": 20437
+  }
+}

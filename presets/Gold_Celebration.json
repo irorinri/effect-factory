@@ -1,0 +1,22 @@
+{
+  "name": "Gold Celebration",
+  "effect_id": "confetti_pro",
+  "description": "Shimmering gold paper and ribbons.",
+  "tags": [
+    "gold",
+    "wedding",
+    "award"
+  ],
+  "duration": 8.0,
+  "params": {
+    "palette": "gold",
+    "density": 1.2,
+    "size": 1.1,
+    "shimmer": 0.9,
+    "glow": 0.35,
+    "shape": "mixed"
+  },
+  "random": {
+    "base_seed": 12765
+  }
+}

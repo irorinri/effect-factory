@@ -1,0 +1,26 @@
+{
+  "name": "Love Hearts",
+  "effect_id": "confetti_pro",
+  "description": "Floating hearts rising gently.",
+  "tags": [
+    "hearts",
+    "love",
+    "valentine"
+  ],
+  "duration": 8.0,
+  "params": {
+    "palette": "magenta",
+    "shape": "hearts",
+    "density": 0.55,
+    "size": 2.2,
+    "speed": 0.5,
+    "motion_direction": 180.0,
+    "spin": 0.4,
+    "sway": 0.8,
+    "shimmer": 0.12,
+    "glow": 0.4
+  },
+  "random": {
+    "base_seed": 14683
+  }
+}

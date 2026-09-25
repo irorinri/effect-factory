@@ -1,0 +1,26 @@
+{
+  "name": "Blueprint Grid",
+  "effect_id": "grid_lattice",
+  "description": "Calm technical grid slowly sliding.",
+  "tags": [
+    "grid",
+    "tech",
+    "blue"
+  ],
+  "duration": 8.0,
+  "params": {
+    "palette": "cool",
+    "spacing": 80.0,
+    "vertical_width": 2.0,
+    "horizontal_width": 2.0,
+    "vertical_width_randomness": 0.2,
+    "horizontal_width_randomness": 0.2,
+    "vertical_speed": 0.2,
+    "horizontal_speed": -0.1,
+    "line_fade": 0.55,
+    "glow": 0.3
+  },
+  "random": {
+    "base_seed": 37699
+  }
+}

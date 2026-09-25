@@ -1,0 +1,28 @@
+{
+  "name": "Heavenly Rays",
+  "effect_id": "light_rays",
+  "description": "Soft god rays falling from above.",
+  "tags": [
+    "god rays",
+    "warm",
+    "divine"
+  ],
+  "duration": 10.0,
+  "params": {
+    "source": "top",
+    "color": "warm",
+    "count": 5,
+    "width": 140.0,
+    "spread": 0.6,
+    "sweep": 0.08,
+    "speed": 0.4,
+    "flicker": 0.0,
+    "haze": 0.35,
+    "strength": 0.5,
+    "glow": 1.2,
+    "motion_direction": 12.0
+  },
+  "random": {
+    "base_seed": 24273
+  }
+}

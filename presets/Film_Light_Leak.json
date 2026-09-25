@@ -1,0 +1,17 @@
+{
+  "name": "Film Light Leak",
+  "effect_id": "light_leaks",
+  "description": "Warm analogue light leaks with gentle flashes.",
+  "tags": [
+    "film",
+    "vintage",
+    "warm"
+  ],
+  "duration": 8.0,
+  "params": {
+    "palette": "ember"
+  },
+  "random": {
+    "base_seed": 25232
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Northern Lights",
+  "effect_id": "aurora_ribbons",
+  "description": "Green and violet aurora curtains.",
+  "tags": [
+    "aurora",
+    "night",
+    "sky"
+  ],
+  "duration": 12.0,
+  "params": {
+    "palette": "aurora"
+  },
+  "random": {
+    "base_seed": 32904
+  }
+}

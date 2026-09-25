@@ -1,59 +1,21 @@
 {
   "name": "Fantasia Nebula",
   "effect_id": "starfield_pro",
-  "loop_mode": true,
-  "output": {
-    "w": 1920,
-    "h": 1080,
-    "fps": 30,
-    "duration": 12.0,
-    "encoder": "h264_nvenc",
-    "nv_preset": "p4",
-    "bitrate": "14M"
+  "description": "Vivid aurora-coloured nebula clouds.",
+  "tags": [
+    "space",
+    "nebula",
+    "fantasy"
+  ],
+  "duration": 12.0,
+  "params": {
+    "palette": "aurora",
+    "nebula": 0.8,
+    "glow_strength": 1.2,
+    "density": 0.9,
+    "speed": 0.4
   },
   "random": {
-    "base_seed": 56789
-  },
-  "params": {
-    "density": [
-      0.6,
-      1.1
-    ],
-    "nebula": [
-      0.55,
-      1.05
-    ],
-    "twinkle": [
-      0.1,
-      0.25
-    ],
-    "shooting_stars": [
-      1,
-      4
-    ],
-    "glow_radius": [
-      6.0,
-      12.0
-    ],
-    "glow_strength": [
-      1.0,
-      1.8
-    ],
-    "chromatic": [
-      2,
-      5
-    ],
-    "grain": [
-      0.02,
-      0.06
-    ],
-    "drift_x_cycles": [
-      1,
-      4
-    ],
-    "drift_y_cycles": [
-      1,
-      4
-    ]
+    "base_seed": 30986
   }
 }

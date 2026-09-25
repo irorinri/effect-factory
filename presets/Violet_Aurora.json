@@ -1,0 +1,20 @@
+{
+  "name": "Violet Aurora",
+  "effect_id": "aurora_ribbons",
+  "description": "Magenta-violet aurora with strong rays.",
+  "tags": [
+    "aurora",
+    "purple",
+    "sky"
+  ],
+  "duration": 12.0,
+  "params": {
+    "palette": "purple",
+    "ribbons": 4,
+    "curtain": 0.8,
+    "brightness": 0.95
+  },
+  "random": {
+    "base_seed": 33863
+  }
+}

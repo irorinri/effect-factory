@@ -245,7 +245,10 @@ def build_cache(w, h, frames, seed, params):
     preserve_sprite_aspect = bool(sprite_path)
     sprite = _load_sprite(sprite_path)
     sprite_w, sprite_h = sprite.size
-    margin = max(64.0, max_size * max_length * 4.0)
+    # Sizes are authored in pixels at 1080p and scaled with the frame so
+    # previews and exports match.
+    unit = min(w, h) / 1080.0
+    margin = max(64.0 * unit, max_size * unit * max_length * 4.0)
     formation_lanes = max(4, min(12, int(round(np.sqrt(target_count * max(0.65, w / max(1.0, h)))))))
     formation_rows = max(1, int(np.ceil(target_count / formation_lanes)))
     max_count = formation_lanes * formation_rows
@@ -299,7 +302,7 @@ def build_cache(w, h, frames, seed, params):
                 "width_mix": float(rng.uniform(0.65, 1.1)),
                 "stretch_mix": float(rng.uniform(0.85, 1.35)),
                 "alpha": float(rng.uniform(0.35, 0.95)),
-                "sway_amp": float(rng.uniform(6.0, 18.0) * depth),
+                "sway_amp": float(rng.uniform(6.0, 18.0) * depth * unit),
                 "sway_rate": float(rng.uniform(0.08, 0.32)),
                 "phase": float(rng.uniform(0.0, 2.0 * np.pi)),
             }
@@ -320,6 +323,7 @@ def build_cache(w, h, frames, seed, params):
         "sprite": sprite,
         "sprite_size": (sprite_w, sprite_h),
         "margin": margin,
+        "unit": unit,
         "ordered_speed_px": ordered_speed_px,
         "preserve_sprite_aspect": preserve_sprite_aspect,
         "preserve_shape_trail": builtin_sprite not in {"circle", "square", "star"},
@@ -352,11 +356,11 @@ def render_frame(cache, i):
     duration_sec = max(1.0 / fps, (n - 1) / float(fps))
     params = frame_params(cache)
     defaults = cache["defaults"]
-    speed = max(0.0, float(params.get("speed", defaults["speed"])))
     density = max(0.0, float(params.get("density", defaults["density"])))
     visible_target = min(float(len(cache["particles"])), len(cache["particles"]) * density / max(1e-6, cache["max_density"]))
-    size_min = max(2.0, float(params.get("size_min", defaults["size_min"])))
-    size_max = max(size_min, float(params.get("size_max", defaults["size_max"])))
+    unit = float(cache.get("unit", 1.0))
+    size_min = max(2.0, float(params.get("size_min", defaults["size_min"]))) * unit
+    size_max = max(size_min, float(params.get("size_max", defaults["size_max"])) * unit)
     size_randomness = float(np.clip(params.get("size_randomness", defaults["size_randomness"]), 0.0, 1.0))
     length = max(0.3, float(params.get("length", defaults["length"])))
     blur = max(0.0, float(params.get("blur", defaults["blur"])))
@@ -431,7 +435,7 @@ def render_frame(cache, i):
         size_mix = 0.5 + (particle["size_mix"] - 0.5) * size_randomness
         size = size_min + size_mix * (size_max - size_min)
         width_mix = 1.0 + (particle["width_mix"] - 1.0) * size_randomness
-        width = max(2.0, size * width_mix)
+        width = max(1.5, size * width_mix)
         base_height = width * aspect
         alpha_mix = particle["alpha"] * vis * (0.6 + 0.4 * particle["depth"])
         if alpha_mix <= 0.02:
@@ -485,7 +489,10 @@ def render_frame(cache, i):
     return finish(buf, exposure=max(0.0, float(params.get("brightness", defaults["brightness"]))))
 
 def _builtin_preview(token, size=72):
-    return make_builtin_rain_sprite(token, size=size)
+    sprite = make_builtin_rain_sprite(token or "drop", size=size)
+    if not token:  # default streak: the drop stretched along the fall direction
+        sprite = sprite.resize((max(1, sprite.width // 2), sprite.height * 2), Image.Resampling.LANCZOS)
+    return sprite
 
 
 EFFECT = {
@@ -500,12 +507,13 @@ EFFECT = {
         "hint": "Pick a built-in shape or any transparent PNG.",
         "filetypes": [("Transparent PNG", "*.png")],
         "builtin": [
+            {"token": "", "label": "Streak"},
             {"token": builtin_rain_sprite_token("drop"), "label": "Drop"},
             {"token": builtin_rain_sprite_token("circle"), "label": "Circle"},
             {"token": builtin_rain_sprite_token("square"), "label": "Square"},
             {"token": builtin_rain_sprite_token("star"), "label": "Star"},
         ],
-        "default": builtin_rain_sprite_token("drop"),
+        "default": "",
         "preview": _builtin_preview,
     },
     "params": [

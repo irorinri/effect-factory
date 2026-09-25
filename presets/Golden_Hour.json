@@ -1,0 +1,26 @@
+{
+  "name": "Golden Hour",
+  "effect_id": "bokeh_orbs",
+  "description": "Huge soft golden orbs for a sunset glow.",
+  "tags": [
+    "gold",
+    "sunset",
+    "warm"
+  ],
+  "duration": 12.0,
+  "params": {
+    "palette": "gold",
+    "aperture": "octagon",
+    "count": 35,
+    "size_min": 40.0,
+    "size_max": 220.0,
+    "rim": 0.3,
+    "opacity": 0.45,
+    "blur": 2.5,
+    "glow_strength": 0.9,
+    "speed": 0.4
+  },
+  "random": {
+    "base_seed": 21396
+  }
+}

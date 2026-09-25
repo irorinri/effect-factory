@@ -1,0 +1,23 @@
+{
+  "name": "Deep Space Drift",
+  "effect_id": "starfield_pro",
+  "description": "Fast parallax star drift, no clouds.",
+  "tags": [
+    "space",
+    "travel",
+    "stars"
+  ],
+  "duration": 8.0,
+  "params": {
+    "palette": "ocean",
+    "nebula": 0.15,
+    "density": 2.0,
+    "depth": 1.0,
+    "speed": 2.5,
+    "shooting_stars": 0,
+    "twinkle": 0.2
+  },
+  "random": {
+    "base_seed": 31945
+  }
+}

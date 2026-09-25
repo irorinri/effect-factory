@@ -1,0 +1,21 @@
+{
+  "name": "Soft Snowfall",
+  "effect_id": "snowfall",
+  "description": "Quiet snowfall with blurry flakes close to camera.",
+  "tags": [
+    "snow",
+    "winter",
+    "christmas"
+  ],
+  "duration": 10.0,
+  "params": {
+    "palette": "white",
+    "density": 1.2,
+    "depth": 0.7,
+    "speed": 0.8,
+    "sway": 0.8
+  },
+  "random": {
+    "base_seed": 17560
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Hyperspace",
+  "effect_id": "warp_speed",
+  "description": "Jump to lightspeed.",
+  "tags": [
+    "space",
+    "warp",
+    "sci-fi"
+  ],
+  "duration": 4.0,
+  "params": {
+    "palette": "ice"
+  },
+  "random": {
+    "base_seed": 38658
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "Fairy Dust",
+  "effect_id": "sparkle_dust",
+  "description": "Soft pastel motes floating in every direction.",
+  "tags": [
+    "pastel",
+    "magic",
+    "dreamy"
+  ],
+  "duration": 10.0,
+  "params": {
+    "palette": "pastel",
+    "count": 260,
+    "size_min": 1.2,
+    "size_max": 7.5,
+    "flare": 0.25,
+    "twinkle": 0.8,
+    "speed": 0.6,
+    "wander": 0.6,
+    "spread": 0.8,
+    "glow": 1.2,
+    "blur": 0.8,
+    "brightness": 1.2
+  },
+  "random": {
+    "base_seed": 8929
+  }
+}

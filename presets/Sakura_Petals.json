@@ -1,0 +1,26 @@
+{
+  "name": "Sakura Petals",
+  "effect_id": "confetti_pro",
+  "description": "Cherry blossom petals drifting on the breeze.",
+  "tags": [
+    "pink",
+    "spring",
+    "japan",
+    "petals"
+  ],
+  "duration": 10.0,
+  "params": {
+    "palette": "sakura",
+    "shape": "petals",
+    "density": 0.7,
+    "size": 1.4,
+    "speed": 0.45,
+    "spin": 0.6,
+    "sway": 1.2,
+    "shimmer": 0.15,
+    "motion_direction": 20.0
+  },
+  "random": {
+    "base_seed": 13724
+  }
+}

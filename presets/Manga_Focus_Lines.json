@@ -1,0 +1,19 @@
+{
+  "name": "Manga Focus Lines",
+  "effect_id": "focus_lines",
+  "description": "Classic manga speed lines around the centre.",
+  "tags": [
+    "manga",
+    "anime",
+    "impact"
+  ],
+  "duration": 4.0,
+  "params": {
+    "count": 180,
+    "hole_radius": 90.0,
+    "brightness": 0.8
+  },
+  "random": {
+    "base_seed": 34822
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "Synthwave Grid",
+  "effect_id": "grid_lattice",
+  "description": "Retro neon floor grid scrolling to the horizon.",
+  "tags": [
+    "retro",
+    "synthwave",
+    "80s"
+  ],
+  "duration": 6.0,
+  "params": {
+    "palette": "vapor",
+    "perspective": 0.8,
+    "vertical_width": 3.0,
+    "horizontal_width": 3.0,
+    "vertical_width_randomness": 0.0,
+    "horizontal_width_randomness": 0.0,
+    "vertical_speed": 0.0,
+    "horizontal_speed": -1.0,
+    "line_fade": 0.0,
+    "glow": 1.4,
+    "blur": 0.4,
+    "spacing": 110.0
+  },
+  "random": {
+    "base_seed": 36740
+  }
+}

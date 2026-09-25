@@ -68,7 +68,8 @@ def _draw_line_family(draw, cx: float, cy: float, offsets: np.ndarray, widths: n
 
 def build_cache(w, h, frames, seed, params):
     loop = bool(params.get("__loop__", False))
-    min_spacing = max(2.0, min_numeric(params, "spacing", 90.0))
+    unit = min(w, h) / 1080.0
+    min_spacing = max(2.0, min_numeric(params, "spacing", 90.0) * unit)
     line_extent = 0.5 * float(np.hypot(w, h)) + 0.25 * float(max(w, h))
     line_radius = max(4, int(np.ceil(line_extent / min_spacing)) + 4)
     indices = np.arange(-line_radius, line_radius + 1, dtype=np.float32)
@@ -83,6 +84,7 @@ def build_cache(w, h, frames, seed, params):
         "__fps__": int(params.get("__fps__", 30)),
         "__frames__": int(params.get("__frames__", frames)),
         "seed": int(seed),
+        "unit": unit,
         "indices": indices,
         "line_radius": int(line_radius),
         "line_count": int(line_count),
@@ -144,12 +146,14 @@ def render_frame(cache, i):
     params = frame_params(cache)
     defaults = cache["defaults"]
 
-    spacing = max(2.0, float(params.get("spacing", defaults["spacing"])))
-    vertical_width = float(params.get("vertical_width", defaults["vertical_width"]))
+    # Pixel sizes are authored at 1080p and scale with the frame.
+    unit = float(cache.get("unit", 1.0))
+    spacing = max(2.0, float(params.get("spacing", defaults["spacing"])) * unit)
+    vertical_width = float(params.get("vertical_width", defaults["vertical_width"])) * unit
     vertical_width_randomness = float(
         params.get("vertical_width_randomness", defaults["vertical_width_randomness"])
     )
-    horizontal_width = float(params.get("horizontal_width", defaults["horizontal_width"]))
+    horizontal_width = float(params.get("horizontal_width", defaults["horizontal_width"])) * unit
     horizontal_width_randomness = float(
         params.get("horizontal_width_randomness", defaults["horizontal_width_randomness"])
     )
@@ -270,7 +274,7 @@ def render_frame(cache, i):
                         coord_scale=float(ssaa),
                     )
 
-    blur = max(0.0, float(params.get("blur", defaults["blur"])))
+    blur = max(0.0, float(params.get("blur", defaults["blur"]))) * unit
     perspective = float(np.clip(params.get("perspective", defaults.get("perspective", 0.0)), 0.0, 1.0))
     colors = [palette_sample(palette, 0.0)] if mono else [palette_sample(palette, t) for t in (0.0, 1.0, 0.5)]
     buf = np.zeros((h, w, 3), dtype=np.float32)

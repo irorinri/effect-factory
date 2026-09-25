@@ -1,0 +1,23 @@
+{
+  "name": "Ground Mist",
+  "effect_id": "fog_haze",
+  "description": "White mist hugging the bottom of the frame.",
+  "tags": [
+    "mist",
+    "ground",
+    "white"
+  ],
+  "duration": 12.0,
+  "params": {
+    "tint": "cool",
+    "ground": 1.0,
+    "strength": 0.5,
+    "scale": 1.4,
+    "speed": 0.6,
+    "contrast": 1.6,
+    "detail": 0.3
+  },
+  "random": {
+    "base_seed": 28109
+  }
+}

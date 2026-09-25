@@ -1,0 +1,25 @@
+{
+  "name": "Neon Rain",
+  "effect_id": "png_rain",
+  "description": "Cyberpunk rain in glowing neon colours.",
+  "tags": [
+    "neon",
+    "cyberpunk",
+    "rain"
+  ],
+  "duration": 6.0,
+  "params": {
+    "palette": "neon",
+    "density": 1.8,
+    "length": 3.2,
+    "speed": 1.6,
+    "speed_randomness": 0.5,
+    "size_randomness": 0.5,
+    "motion_direction": 15.0,
+    "glow_strength": 0.9,
+    "brightness": 1.2
+  },
+  "random": {
+    "base_seed": 16601
+  }
+}

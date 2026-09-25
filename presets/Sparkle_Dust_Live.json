@@ -1,63 +1,35 @@
 {
   "name": "Sparkle Dust Live",
   "effect_id": "sparkle_dust",
-  "loop_mode": true,
-  "output": {
-    "w": 1920,
-    "h": 1080,
-    "fps": 30,
-    "duration": 8.0,
-    "encoder": "h264_nvenc",
-    "nv_preset": "p4",
-    "bitrate": "10M"
-  },
-  "random": {
-    "base_seed": 31415
-  },
+  "description": "Golden glitter drifting upwards with glints.",
+  "tags": [
+    "sparkle",
+    "gold",
+    "glitter"
+  ],
+  "duration": 8.0,
   "params": {
+    "palette": "gold",
     "count": [
-      180,
-      420
-    ],
-    "size_min": [
-      0.8,
-      1.8
+      260,
+      380
     ],
     "size_max": [
-      2.6,
-      6.0
+      3.8,
+      5.2
     ],
-    "twinkle": [
-      0.4,
-      0.95
+    "flare": [
+      0.35,
+      0.55
     ],
-    "blur": [
-      0.3,
-      1.2
+    "twinkle": 0.7,
+    "speed": [
+      0.7,
+      1.1
     ],
-    "glow": [
-      0.2,
-      0.9
-    ],
-    "grain": [
-      0.0,
-      0.03
-    ],
-    "drift_x_cycles": [
-      0,
-      2
-    ],
-    "drift_y_cycles": [
-      0,
-      2
-    ],
-    "palette": {
-      "choices": [
-        "white",
-        "cool",
-        "warm"
-      ]
-    }
+    "glow": 0.9
+  },
+  "random": {
+    "base_seed": 7970
   }
 }
-

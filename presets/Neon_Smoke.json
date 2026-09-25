@@ -1,0 +1,23 @@
+{
+  "name": "Neon Smoke",
+  "effect_id": "fog_haze",
+  "description": "Colourful smoke swirling in neon hues.",
+  "tags": [
+    "smoke",
+    "neon",
+    "club"
+  ],
+  "duration": 10.0,
+  "params": {
+    "tint": "neon",
+    "contrast": 2.2,
+    "strength": 0.33,
+    "ground": 0.0,
+    "evolve": 0.7,
+    "speed": 0.8,
+    "glow": 0.6
+  },
+  "random": {
+    "base_seed": 29068
+  }
+}

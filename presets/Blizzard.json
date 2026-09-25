@@ -1,0 +1,23 @@
+{
+  "name": "Blizzard",
+  "effect_id": "snowfall",
+  "description": "Dense, wind-driven snowstorm.",
+  "tags": [
+    "snow",
+    "storm",
+    "winter"
+  ],
+  "duration": 6.0,
+  "params": {
+    "palette": "ice",
+    "density": 2.4,
+    "speed": 2.2,
+    "motion_direction": 38.0,
+    "sway": 0.4,
+    "depth": 1.0,
+    "glow": 0.4
+  },
+  "random": {
+    "base_seed": 18519
+  }
+}

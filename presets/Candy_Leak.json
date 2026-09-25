@@ -1,0 +1,21 @@
+{
+  "name": "Candy Leak",
+  "effect_id": "light_leaks",
+  "description": "Pastel light leaks for dreamy edits.",
+  "tags": [
+    "pastel",
+    "dreamy",
+    "film"
+  ],
+  "duration": 8.0,
+  "params": {
+    "palette": "sunset",
+    "count": 5,
+    "warmth": 0.1,
+    "flash": 0.2,
+    "size": 1.2
+  },
+  "random": {
+    "base_seed": 26191
+  }
+}

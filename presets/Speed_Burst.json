@@ -1,0 +1,25 @@
+{
+  "name": "Speed Burst",
+  "effect_id": "focus_lines",
+  "description": "Curved colourful burst lines with glow.",
+  "tags": [
+    "anime",
+    "burst",
+    "colour"
+  ],
+  "duration": 4.0,
+  "params": {
+    "palette": "sunset",
+    "count": 220,
+    "spiral": 30.0,
+    "line_curve": 20.0,
+    "hole_radius": 150.0,
+    "glow": 1.2,
+    "brightness": 1.0,
+    "flicker": 0.4,
+    "speed": 1.5
+  },
+  "random": {
+    "base_seed": 35781
+  }
+}

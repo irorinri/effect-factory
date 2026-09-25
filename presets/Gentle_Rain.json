@@ -1,0 +1,27 @@
+{
+  "name": "Gentle Rain",
+  "effect_id": "png_rain",
+  "description": "Light slanted rain with soft drops.",
+  "tags": [
+    "rain",
+    "calm",
+    "blue"
+  ],
+  "duration": 6.0,
+  "params": {
+    "palette": "ice",
+    "density": 1.4,
+    "size_min": 8.0,
+    "size_max": 20.0,
+    "length": 2.6,
+    "speed": 1.3,
+    "speed_randomness": 0.4,
+    "size_randomness": 0.6,
+    "motion_direction": 8.0,
+    "blur": 0.4,
+    "glow_strength": 0.25
+  },
+  "random": {
+    "base_seed": 15642
+  }
+}

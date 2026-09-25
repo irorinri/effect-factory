@@ -1,0 +1,23 @@
+{
+  "name": "Cyber Glitch",
+  "effect_id": "glitch_scanlines",
+  "description": "Aggressive digital blocks with RGB split.",
+  "tags": [
+    "cyberpunk",
+    "digital",
+    "glitch"
+  ],
+  "duration": 5.0,
+  "params": {
+    "palette": "cyber",
+    "blocks": 0.9,
+    "noise": 0.3,
+    "tear_prob": 0.3,
+    "chromatic": 6.0,
+    "burstiness": 0.8,
+    "glow": 0.6
+  },
+  "random": {
+    "base_seed": 41535
+  }
+}

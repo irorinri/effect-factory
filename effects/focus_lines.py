@@ -178,8 +178,10 @@ def render_frame(cache, i):
     speed = max(0.0, float(params.get('speed', defaults['speed'])))
     requested_count = min(float(cache['max_count']), max(0.0, float(params.get('count', defaults['count']))))
     base_length = max(0.0, cache['radius'] * float(params.get('length', defaults['length'])))
-    base_width = max(1.0, float(params.get('width', defaults['width'])))
-    hole_radius = max(0.0, float(params.get('hole_radius', defaults['hole_radius'])))
+    # Pixel sizes are authored at 1080p and scale with the frame.
+    unit = min(w, h) / 1080.0
+    base_width = max(1.0, float(params.get('width', defaults['width'])) * unit)
+    hole_radius = max(0.0, float(params.get('hole_radius', defaults['hole_radius'])) * unit)
     hole_spiral = float(np.clip(params.get('hole_spiral', defaults['hole_spiral']), 0.0, 1.0))
     hole_spiral_branches = int(np.clip(round(float(params.get('hole_spiral_branches', defaults['hole_spiral_branches']))), 1, 30))
     hole_spiral_beta = float(np.clip(params.get('hole_spiral_beta', defaults['hole_spiral_beta']), 0.0, 2.0))
@@ -196,7 +198,7 @@ def render_frame(cache, i):
     wobble = float(np.clip(params.get('wobble', defaults['wobble']), 0.0, 0.45))
     rotation_speed = np.deg2rad(float(params.get('rotation_speed', defaults['rotation_speed'])))
     flicker = float(np.clip(params.get('flicker', defaults['flicker']), 0.0, 1.0))
-    blur = max(0.0, float(params.get('blur', defaults['blur'])))
+    blur = max(0.0, float(params.get('blur', defaults['blur']))) * unit
     glow = max(0.0, float(params.get('glow', defaults['glow'])))
     brightness = float(params.get('brightness', defaults['brightness']))
 
