@@ -182,10 +182,33 @@ class LibraryPanel(ttk.Frame):
         if card is not None:
             card.set_thumb(img)
 
-    def set_selected(self, key):
+    def set_selected(self, key, reveal=True):
         self.selected = key
         for k, card in self.cards.items():
             card.set_selected(k == key)
+        if reveal:
+            self._reveal_pending = True
+            self._reveal_tries = 0
+            self.after_idle(self.reveal_selected)
+
+    def reveal_selected(self):
+        """Scroll the grid so the selected card is visible."""
+        card = self.cards.get(self.selected)
+        if card is None or not card.winfo_ismapped():
+            # Cards are laid out lazily; try again shortly (bounded).
+            self._reveal_tries = getattr(self, "_reveal_tries", 0) + 1
+            if self._reveal_pending and card is not None and self._reveal_tries < 30:
+                self.after(100, self.reveal_selected)
+            return
+        self._reveal_pending = False
+        self.update_idletasks()
+        total = max(1, self.grid_frame.winfo_height())
+        view_h = self.scroll.canvas.winfo_height()
+        top, bottom = self.scroll.canvas.yview()
+        y0 = card.winfo_y()
+        y1 = y0 + card.winfo_height()
+        if y0 < top * total or y1 > bottom * total:
+            self.scroll.canvas.yview_moveto(max(0.0, (y0 - view_h * 0.3) / total))
 
     def set_filter(self, name, notify=True):
         self.filter = name
@@ -240,6 +263,9 @@ class LibraryPanel(ttk.Frame):
             card.grid(row=r, column=c, padx=(0 if c == 0 else gap, 0), pady=(0, S(10)), sticky="nw")
         if not visible:
             self.empty.grid(row=0, column=0, pady=S(20), padx=S(6), sticky="w")
+        if getattr(self, "_reveal_pending", False):
+            self._reveal_tries = 0
+            self.after(50, self.reveal_selected)
 
     def on_select(self, item):
         self.on_select_cb(item)

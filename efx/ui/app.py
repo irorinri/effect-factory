@@ -264,6 +264,7 @@ class EffectFactoryApp(tk.Tk):
         self.after(400, self._queue_thumbnails)
         self.after(900, self.shuffle_variations)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.set_status("Pick a look on the left · Space plays · R surprises you · Ctrl+E exports")
         self.deiconify()
         if self.options.get("tab"):
             tabs = {"adjust": 0, "explore": 1, "export": 2}
@@ -460,6 +461,16 @@ class EffectFactoryApp(tk.Tk):
                 return "break"
             return handler
 
+        def refocus(e):
+            # Clicking anything but a text field hands keyboard focus back to
+            # the window so Space / R / 1-3 work right after using the search.
+            try:
+                focused = self.focus_get()
+            except (KeyError, tk.TclError):  # combobox pop-downs confuse focus_get
+                return
+            if focused is not None and not is_typing(e.widget) and is_typing(focused):
+                self.focus_set()
+        self.bind_all("<ButtonPress-1>", refocus, add="+")
         self.bind_all("<space>", guard(self.toggle_play))
         self.bind_all("<Home>", guard(lambda: self.seek(0.0)))
         self.bind_all("<Left>", guard(lambda: self.step_frame(-1)))

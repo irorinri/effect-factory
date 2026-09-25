@@ -1,50 +1,57 @@
 # EffectFactory
 
-EffectFactory is a local-first Python desktop tool for generating loopable
-black-background motion-overlay assets for music videos, streams, shorts, and
-other creator workflows.
+EffectFactory is a local-first desktop tool for making loopable overlay effects
+for music videos, streams, shorts and other creator work. Pick a look, tweak it
+live, export a seamless loop. Everything renders on your machine.
 
-It renders procedural effects to MP4, stores reproducible seed/settings JSON,
-and supports a small plugin format so new effects can be added as plain Python
-files.
+![Effect Factory main window](docs/images/ui.png)
 
-## Why This Exists
+## Highlights
 
-Many small creators need quick overlay materials such as sparkle dust, focus
-lines, rain, light rays, scanlines, and stage particles without depending on a
-cloud service or a paid asset pack. EffectFactory keeps that workflow local,
-repeatable, and hackable.
+- **Beautiful by default** – 14 procedural effects rebuilt on an HDR rendering
+  kit (soft bloom, highlight roll-off, anti-aliasing, banding-free dithering)
+  and 36 curated looks such as *Northern Lights*, *City Lights Bokeh*,
+  *Sakura Petals*, *Synthwave Grid* and *Hyperspace*.
+- **Seamless loops** – motion is snapped to the loop length so most effects
+  loop perfectly with no blending. Effects that cannot (and animated timelines)
+  get an automatic cross-fade.
+- **Easy to explore** – *Surprise me* makes tasteful random changes, the
+  Explore tab renders six variations to pick from, and undo/redo covers every
+  change.
+- **Palettes everywhere** – 26 colour palettes shared by all effects, chosen
+  from swatches.
+- **See it in context** – preview over black, a built-in twilight scene or your
+  own image (Screen blend), at draft/good/full quality.
+- **Timeline variations** – store looks at X / Y / Z markers and the effect
+  morphs between them; drag a marker right to hold it.
+- **Pro exports** – MP4 (H.264, BT.709) with automatic hardware-encoder
+  detection (NVENC / Quick Sync / AMF / VideoToolbox, falling back to x264),
+  MOV with alpha (ProRes 4444), or transparent PNG sequences. Rendering runs on
+  several threads, shows an ETA and can be cancelled.
+- **Creator presets** – 1080p, 4K, 720p, vertical 9:16 and square 1:1 frames.
+- **Reproducible** – every export writes a JSON file with the look, seed and
+  resolved parameters.
+- **Hackable** – effects are single Python files in `effects/`.
 
-## Features
+![Some of the included looks](docs/images/looks.jpg)
 
-- Tkinter desktop UI that runs locally on Windows, macOS, and Linux where Python is available
-- MP4 export through ffmpeg
-- preview rendering before full export
-- loop-safe sampling mode for seamless repeated clips
-- reproducible seeds and settings JSON for each render
-- plugin-based effect system in `effects/*.py`
-- built-in presets for common creator overlay styles
+## Included effects
 
-## Included Effects
-
-- bokeh orbs
-- confetti particles
-- focus lines
-- fog and haze
-- glitch scanlines
-- grid lattice
-- light rays
-- PNG/built-in rain sprites
-- sparkle dust
-- starfield
+| Category   | Effects |
+|------------|---------|
+| Particles  | Sparkle Dust, Confetti Pro (paper, ribbons, hearts, petals, stars), Rain & Sprites (custom PNGs), Snowfall |
+| Light      | Bokeh Orbs, Light Rays (stage / live), Light Leaks |
+| Atmosphere | Fog Haze, Starfield Pro, Aurora Ribbons |
+| Graphic    | Focus Lines, Grid Lattice (incl. synthwave floor), Warp Speed |
+| Glitch     | Glitch Scanlines |
 
 ## Requirements
 
-- Python 3.10 or later
-- ffmpeg available on `PATH`, or selected from the app UI
-- Python packages listed in `requirements.txt`
-
-Tkinter is included with most standard Python installers.
+- Python 3.10 or later with Tkinter (included with the python.org installers)
+- `numpy` and `Pillow` (see `requirements.txt`)
+- [ffmpeg](https://ffmpeg.org/download.html) for MP4/MOV export – found
+  automatically on `PATH`, or locate it in the Export tab. PNG sequences work
+  without ffmpeg.
 
 ## Setup
 
@@ -55,65 +62,121 @@ python -m pip install -r requirements.txt
 python effect_factory.py
 ```
 
-If you already have Python packages installed globally, the app can also be run
-directly:
+On macOS / Linux use `python3 -m venv .venv` and `source .venv/bin/activate`.
 
-```powershell
-python effect_factory.py
+## Using Effect Factory
+
+1. **Pick a look** in the library on the left (search or filter by category).
+2. **Adjust** it on the right. Sliders show the look's random range as a faint
+   band; edited values get a dot. Double-click a slider to reset it, click its
+   number to type a value, Shift-drag for fine control.
+3. **Explore**: press *Surprise me* (or `R`), or click one of the generated
+   variations. `Ctrl+Z` undoes anything.
+4. **Animate** (optional): save the current look to marker X/Y/Z at the
+   playhead (`1`/`2`/`3`), change settings, save another marker. The effect
+   blends between markers; drag a marker to the right to hold it.
+5. **Export** from the Export tab (or `Ctrl+E`). Use *Draft MP4* for a quick
+   half-resolution check, *Still PNG* for thumbnails, *ZIP package* to bundle a
+   render with the README/LICENSE templates in `templates/`.
+
+Your own looks are saved with *Save look* (`Ctrl+S`) and appear under *Mine*.
+They live in your user folder (`%APPDATA%\EffectFactory`, `~/Library/Application Support/EffectFactory`
+or `~/.config/effect-factory`) together with your settings.
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Space` | Play / pause |
+| `Home`, `←` / `→` | Back to start, step one frame |
+| `R` | Surprise me |
+| `1` / `2` / `3` | Save marker X / Y / Z at the playhead |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
+| `Ctrl+S` | Save as your look |
+| `Ctrl+E` | Export |
+| `Ctrl+F` | Search the library |
+| `Ctrl+0` | Reset zoom (mouse wheel on the preview zooms) |
+| `F1` | Show all shortcuts |
+
+### Command line
+
+```text
+python effect_factory.py --look "Northern Lights" --tab export
+python effect_factory.py --screenshot window.png   # capture the window and quit
 ```
 
-## Output Files
+## Output files
 
-EffectFactory writes these files to the selected output folder:
+| File | Contents |
+|------|----------|
+| `*.mp4` | Black-background overlay (use Screen / Add / Lighten blend) |
+| `*.mov` | ProRes 4444 with alpha derived from brightness (normal blend) |
+| `<name>/frame_00001.png …` | Transparent PNG sequence |
+| `*_thumb.png` | First frame |
+| `*.json` | Look, seed, resolved parameters, timeline and render settings |
+| `_preview/` | Draft renders |
+| `_state.json` | Variation counter (when *New variation after each export* is on) |
 
-- `*.mp4`: rendered black-background overlay videos for Screen/Add blending
-- `*_thumb.png`: first-frame thumbnails
-- `*.json`: render settings and seed metadata
-- `_state.json`: local variant counter state
-- `_preview/`: short low-resolution preview renders
+Generated media is ignored by Git.
 
-Generated outputs are intentionally ignored by Git.
+## How seamless loops work
 
-## Writing An Effect Plugin
+Every effect receives the loop length. Frequencies are snapped to a whole
+number of cycles per loop, particles respawn on lifetimes that divide the loop,
+and textures scroll with a three-phase "flow" blend whose weights are periodic.
+The result is that frame *N* equals frame *0* exactly. Effects that are not
+periodic by design (and clips animated with timeline markers) are closed with a
+short cross-fade, shown as *loop blend* on the timeline.
 
-Each plugin is a single Python file in `effects/` that defines an `EFFECT`
-dictionary:
+## Project layout
+
+```text
+effect_factory.py   launcher (CLI options, Windows console/DPI handling)
+efx/core.py         plugins, looks, parameter resolution, timeline model
+efx/engine.py       frame renderer, loop cross-fades, camera zoom
+efx/export.py       ffmpeg discovery, encoders, MP4/MOV/PNG export
+efx/randomize.py    Surprise me and variations
+efx/settings.py     user settings and saved looks
+efx/ui/             Tk interface (theme, widgets, library, preview, inspector)
+effects/            effect plugins and the shared rendering kit (_fxkit.py)
+presets/            built-in looks (JSON)
+tests/              unit, render, export and UI smoke tests
+```
+
+## Writing an effect plugin
+
+Each plugin is a Python file in `effects/` with an `EFFECT` dictionary:
 
 ```python
 EFFECT = {
     "id": "my_effect",
     "name": "My Effect",
-    "params": [],
+    "category": "Particles",
+    "description": "One sentence for the library.",
+    "seamless": True,
+    "params": [
+        {"key": "count", "label": "Amount", "type": "int", "default": 200,
+         "min": 10, "max": 1000, "group": "shape"},
+        {"key": "palette", "label": "Palette", "type": "palette", "default": "aurora", "group": "color"},
+    ],
     "build_cache": build_cache,
     "render_frame": render_frame,
 }
 ```
 
-Existing effects such as `effects/sparkle_dust.py` and
-`effects/focus_lines.py` are the best starting points.
+See [docs/PLUGIN_API.md](docs/PLUGIN_API.md) for the full contract and the
+helpers in `effects/_fxkit.py` (palettes, loop-safe particles, bloom…).
+`effects/sparkle_dust.py` is a compact example.
 
-## Documentation
+## Development
 
-- `docs/PLUGIN_API.md`: plugin structure and effect authoring notes
-- `CONTRIBUTING.md`: contribution workflow and project priorities
-- `CHANGELOG.md`: public release notes
-- `SECURITY.md`: security reporting guidance
+```bash
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
+```
 
-## Project Status
-
-This is an actively maintained creator-tool prototype. The current focus is
-making export behavior more reliable, keeping effects reproducible, and making
-the plugin API easier for other creators to extend.
-
-The first public OSS release is `v0.1.0`.
-
-## Roadmap
-
-- packaged Windows release builds
-- more example plugins
-- effect authoring documentation
-- sample gallery and preview GIFs
-- import/export of preset packs
+The UI smoke test is skipped when no display is available (use `xvfb-run` on
+headless Linux). See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

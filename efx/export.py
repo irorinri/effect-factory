@@ -239,6 +239,7 @@ def export_clip(spec, *, ffmpeg, out_dir, base_name, fmt="mp4", encoder="libx264
             proc.stdin.close()
             err = proc.stderr.read().decode("utf-8", "ignore") if proc.stderr else ""
             code = proc.wait()
+            proc.stderr.close()
             proc = None
             if code != 0:
                 raise RuntimeError(f"ffmpeg failed (exit code {code}).\n{err[-1500:]}")
@@ -258,10 +259,11 @@ def export_clip(spec, *, ffmpeg, out_dir, base_name, fmt="mp4", encoder="libx264
         return {"video": out_path, "thumb": thumb_path, "meta": meta_path}
     except BaseException:
         if proc is not None:
-            try:
-                proc.stdin.close()
-            except Exception:
-                pass
+            for stream in (proc.stdin, proc.stderr):
+                try:
+                    stream.close()
+                except Exception:
+                    pass
             try:
                 proc.kill()
                 proc.wait(timeout=5)
