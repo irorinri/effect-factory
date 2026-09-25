@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### New
+- One-time setup scripts that put an *Effect Factory* icon on the desktop:
+  `setup_windows.bat` (desktop and Start menu shortcut, no console window;
+  offers to install Python and ffmpeg with winget), `setup_mac.command`
+  (an `Effect Factory.app` on the desktop) and `setup.sh` (Linux launcher on
+  the desktop and in the application menu). `--remove` removes the icons.
+- `tools/install_desktop.py` creates or removes the shortcuts for the Python
+  that runs it.
+- ffmpeg installed with winget is found even when winget could not create its
+  command link.
+
 ## v0.3.0 - Japanese UI, light theme, three new effects
 
 ### New

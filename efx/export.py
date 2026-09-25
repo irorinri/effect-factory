@@ -1,5 +1,6 @@
 """ffmpeg discovery, encoder probing and clip export."""
 
+import glob
 import os
 import platform
 import shutil
@@ -62,6 +63,9 @@ def find_ffmpeg(preferred=None):
         candidates += ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
     else:
         candidates += ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/snap/bin/ffmpeg"]
+    if os.name == "nt":  # winget without symlinks: %LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg*\*\bin
+        packages = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Packages")
+        candidates += sorted(glob.glob(os.path.join(packages, "*FFmpeg*", "*", "bin", "ffmpeg.exe")), reverse=True)
     for cand in candidates:
         if not cand:
             continue

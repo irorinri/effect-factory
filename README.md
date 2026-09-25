@@ -5,6 +5,7 @@ for music videos, streams, shorts and other creator work. Pick a look, tweak it
 live, export a seamless loop. Everything renders on your machine.
 
 日本語 UI に対応しています（OS の言語設定に合わせて自動で切り替わり、ヘッダーからいつでも変更できます）。
+デスクトップから起動するには、[かんたんセットアップ](#quick-start-desktop-icon) を一度実行してください。
 
 ![Effect Factory main window](docs/images/ui.png)
 
@@ -70,13 +71,44 @@ New in 0.3:
   automatically on `PATH`, or locate it in the Export tab. PNG sequences work
   without ffmpeg.
 
-## Setup
+## Quick start (desktop icon)
+
+Run the setup once; afterwards start Effect Factory from its desktop icon.
+
+| System | Do this |
+|--------|---------|
+| Windows | Double-click **`setup_windows.bat`** |
+| macOS | Double-click **`setup_mac.command`** (if macOS refuses: right-click → *Open*) |
+| Linux | Run **`./setup.sh`** in a terminal |
+
+The setup creates a private Python environment in `.venv`, installs numpy and
+Pillow, and adds an *Effect Factory* icon to the desktop (plus the Start menu on
+Windows / the application menu on Linux). On Windows it offers to install
+Python and ffmpeg with `winget` when they are missing. Run it again after
+moving the folder; `setup_windows.bat --remove` or `./setup.sh --remove`
+removes the icons.
+
+**かんたんセットアップ（日本語）**
+
+1. Windows では `setup_windows.bat` をダブルクリックします（「Windows によって PC
+   が保護されました」と表示されたら「詳細情報」→「実行」）。macOS では
+   `setup_mac.command`、Linux では `./setup.sh` を実行します。
+2. Python が入っていない場合は、その場で winget によるインストールを提案します
+   （または [python.org](https://www.python.org/downloads/) からインストール）。
+   MP4 書き出しに使う ffmpeg も同様にインストールできます。
+3. 完了するとデスクトップ（Windows ではスタートメニューにも）に
+   「Effect Factory」のアイコンができます。次回からはダブルクリックで起動できます。
+4. フォルダーを移動したときはセットアップをもう一度実行してください。
+   アイコンを消すには `setup_windows.bat --remove` を実行します。
+
+## Setup (manual)
 
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 python effect_factory.py
+python tools\install_desktop.py   # optional: desktop / Start menu shortcut
 ```
 
 On macOS / Linux use `python3 -m venv .venv` and `source .venv/bin/activate`.
@@ -160,6 +192,7 @@ efx/export.py       ffmpeg discovery, encoders, MP4/MOV/PNG export
 efx/randomize.py    Surprise me and variations
 efx/settings.py     user settings and saved looks
 efx/i18n.py         UI translations (English source strings, Japanese)
+tools/              desktop shortcut installer used by the setup scripts
 efx/ui/             Tk interface (themes, widgets, library, preview, inspector)
 effects/            effect plugins and the shared rendering kit (_fxkit.py)
 presets/            built-in looks (JSON)
